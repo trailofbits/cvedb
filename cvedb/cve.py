@@ -1,0 +1,2 @@
+class CVE:
+    pass
