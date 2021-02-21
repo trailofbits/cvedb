@@ -1,12 +1,16 @@
 from dataclasses import dataclass
 from datetime import datetime
+from gzip import decompress
+import json
 import sys
-from typing import Iterable, Optional, TextIO, Union
+from typing import Any, Dict, Iterable, Optional, TextIO, Union
 import urllib.request
 
+from cvss import CVSS2, CVSS3
+from dateutil.parser import isoparse
 from tqdm import tqdm
 
-from .cve import CVE
+from .cve import CVE, Description, Reference
 from .feed import Data, Feed
 
 BASE_JSON_URL: str = "https://nvd.nist.gov/feeds/json/cve/1.1/nvdcve-1.1-"
@@ -33,7 +37,7 @@ class Meta:
     sha256: bytes
 
     @staticmethod
-    def loads(meta_str: Union[str, bytes]):
+    def loads(meta_str: Union[str, bytes]) -> "Meta":
         kvs = {}
         for line in meta_str.splitlines():
             if isinstance(line, str):
@@ -48,7 +52,7 @@ class Meta:
                 raise ValueError(f"Duplicate metadata key: {key!r}")
             value = line[first_colon+1:].decode("utf-8")
             if key == "last_modified_date":
-                value = datetime.fromisoformat(value)
+                value = isoparse(value)
             elif key == "sha256":
                 value = bytes.fromhex(value)
             else:
@@ -57,7 +61,7 @@ class Meta:
         return Meta(**kvs)
 
     @staticmethod
-    def load(stream: TextIO):
+    def load(stream: TextIO) -> "Meta":
         return Meta.loads(stream.read())
 
 
@@ -65,6 +69,55 @@ class JsonData(Data):
     def __init__(self, cves: Iterable[CVE], meta: Meta):
         super().__init__(cves, meta.last_modified_date)
         self.meta: Meta = meta
+
+    @staticmethod
+    def parse_cve(cve_obj: Dict[str, Any]) -> CVE:
+        cve_id = cve_obj["cve"]["CVE_data_meta"]["ID"]
+        assigner = cve_obj["cve"]["CVE_data_meta"].get("ASSIGNER", None)
+        references = tuple(
+            Reference(
+                url=ref.get("url", None),
+                name=ref.get("name", None)
+            )
+            for ref in cve_obj["cve"].get("references", {}).get("reference_data", [])
+        )
+        descriptions = tuple(
+            Description(
+                lang=desc["lang"],
+                value=desc["value"]
+            )
+            for desc in cve_obj["cve"].get("description", {}).get("description_data", [])
+        )
+        published_date = isoparse(cve_obj["publishedDate"])
+        last_modified_date = isoparse(cve_obj["lastModifiedDate"])
+        if "baseMetricV3" in cve_obj["impact"]:
+            impact = CVSS3(cve_obj["impact"]["baseMetricV3"]["cvssV3"]["vectorString"])
+        elif "baseMetricV2" in cve_obj["impact"]:
+            impact = CVSS2(cve_obj["impact"]["baseMetricV3"]["cvssV2"]["vectorString"])
+        else:
+            impact = None
+        return CVE(
+            cve_id=cve_id,
+            published_date=published_date,
+            last_modified_date=last_modified_date,
+            impact=impact,
+            descriptions=descriptions,
+            references=references,
+            assigner=assigner
+        )
+
+    @staticmethod
+    def load(json_obj: Dict[str, Any], meta: Optional[Meta] = None) -> "JsonData":
+        for key, expected in (("CVE_data_type", "CVE"), ("CVE_data_format", "MITRE"), ("CVE_data_version", "4.0")):
+            if json_obj.get(key, expected) != expected:
+                raise ValueError(f"Expected {key} to be {expected!r} but instead got {json_obj[key]!r}")
+        if meta is None:
+            if "CVE_data_timestamp" not in json_obj:
+                raise ValueError("If `meta` is None, `json_obj[\"CVE_data_timestamp\"]` must contain a timestamp")
+            meta = Meta(datetime.fromisoformat(json_obj["CVE_data_timestamp"]), 0, 0, 0, b"")
+        return JsonData((
+            JsonData.parse_cve(cve_obj) for cve_obj in json_obj.get("CVE_Items", ())
+        ), meta)
 
 
 def download(url: str, size: Optional[int] = None, show_progress: bool = True) -> bytes:
@@ -98,5 +151,7 @@ class JsonFeed(Feed):
         if existing_data is not None and new_meta.last_modified_date <= existing_data.last_modified_date:
             # the existing data is newer
             return existing_data
-        data = download(self.gz_url, new_meta.gz_size, sys.stderr.isatty())
-        return JsonData((), new_meta)
+        compressed = download(self.gz_url, new_meta.gz_size, sys.stderr.isatty())
+        decompressed = decompress(compressed)
+        data = json.loads(decompressed)
+        return JsonData.load(data, new_meta)

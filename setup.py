@@ -9,7 +9,11 @@ setup(
     version="0.0.1",
     packages=find_packages(exclude=["test"]),
     python_requires=">=3.6",
-    install_requires=[],
+    install_requires=[
+        "cvss~=2.2",
+        "python-dateutil~=2.8.1",
+        "tqdm~=4.48.0"
+    ],
     entry_points={
         "console_scripts": [
             "cvedb = cvedb.__main__:main"
