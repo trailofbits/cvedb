@@ -63,10 +63,12 @@ class Feed(ABC):
         else:
             return None
 
-    def data(self, force_reload: bool = False) -> Data:
+    def is_out_of_date(self) -> bool:
         last_modified = self.last_modified()
-        if last_modified is None or force_reload or \
-                int(time.time()) - last_modified.timestamp() >= MAX_DATA_AGE_SECONDS:
+        return last_modified is None or int(time.time()) - last_modified.timestamp() >= MAX_DATA_AGE_SECONDS
+
+    def data(self, force_reload: bool = False) -> Data:
+        if force_reload or self.is_out_of_date():
             self._data = InMemoryData.load(self.reload(self._data))
         return self._data
 

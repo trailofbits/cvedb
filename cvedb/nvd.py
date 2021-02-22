@@ -97,7 +97,7 @@ class JsonDataSource(DataSource):
         if "baseMetricV3" in cve_obj["impact"]:
             impact = CVSS3(cve_obj["impact"]["baseMetricV3"]["cvssV3"]["vectorString"])
         elif "baseMetricV2" in cve_obj["impact"]:
-            impact = CVSS2(cve_obj["impact"]["baseMetricV3"]["cvssV2"]["vectorString"])
+            impact = CVSS2(cve_obj["impact"]["baseMetricV2"]["cvssV2"]["vectorString"])
         else:
             impact = None
         return CVE(
@@ -129,7 +129,7 @@ def download(url: str, size: Optional[int] = None, show_progress: bool = True) -
         if not show_progress:
             return req.read()
         ret = bytearray()
-        filename = url[url.find("/")+1:]
+        filename = url[url.rfind("/")+1:]
         with tqdm(desc=filename, unit=" b", leave=False) as t:
             if size is not None:
                 t.total = size

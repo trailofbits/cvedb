@@ -1,18 +1,24 @@
 from datetime import datetime
+import itertools
 from pathlib import Path
 from sqlite3 import connect, Connection
-from typing import Iterable, Iterator, List, Optional, Tuple, Union
+from time import time
+from typing import Iterable, Iterator, List, Optional, Union
 
 from cvss import CVSS2, CVSS3, CVSSError
+from tqdm import tqdm
 
 from .cve import CVE
-from .feed import Data, DataSource, Feed, FEEDS
+from .feed import Data, DataSource, Feed, FEEDS, MAX_DATA_AGE_SECONDS
 
+
+UPDATE_INTERVAL_SECONDS: int = MAX_DATA_AGE_SECONDS
 
 FEED_TABLE_CREATE = (
     "CREATE TABLE IF NOT EXISTS feeds("
     "name VARCHAR UNIQUE NOT NULL, "
-    "last_modified INTEGER NULL"
+    "last_modified INTEGER NULL, "
+    "last_checked INTEGER NULL "
     ")"
 )
 
@@ -29,6 +35,42 @@ CVE_TABLE_CREATE = (
 )
 
 
+class CVEdbDataSource(DataSource):
+    def __init__(self, source: Union["DbBackedFeed", "CVEdb"]):
+        super().__init__(source.last_modified())
+        self.connection: Connection = source.connection
+        if isinstance(source, CVEdb):
+            self.feeds: Iterable[DbBackedFeed] = source.feeds
+        else:
+            self.feeds = [source]
+
+    def __iter__(self) -> Iterator[CVE]:
+        c = self.connection.cursor()
+        where_clause = " OR ".join(["feed = ?"] * len(self.feeds))
+        params = tuple(feed.feed_id for feed in self.feeds)
+        c.execute(f"SELECT * FROM cves WHERE {where_clause}", params)
+        for cve_id, _, published, last_modified, impact_vector, _ in c.fetchall():
+            if impact_vector is None:
+                impact = None
+            else:
+                try:
+                    impact = CVSS3(impact_vector)
+                except CVSSError:
+                    try:
+                        impact = CVSS2(impact_vector)
+                    except CVSSError:
+                        impact = None
+            yield CVE(
+                cve_id=cve_id,
+                published_date=datetime.fromtimestamp(published),
+                last_modified_date=datetime.fromtimestamp(last_modified),
+                impact=impact,
+                descriptions=(),  # TODO: Implement descriptions
+                references=(),  # TODO: Implement references
+                assigner=None  # TODO: Implement assigner
+            )
+
+
 class DbBackedFeed(Feed):
     register = False
 
@@ -41,19 +83,75 @@ class DbBackedFeed(Feed):
             self.connection.execute(CVE_TABLE_CREATE)
             c = self.connection.cursor()
             c.execute(f"INSERT OR IGNORE INTO feeds (name) VALUES (?)", (parent.name,))
-            if c.lastrowid is not None:
+            if c.lastrowid is not None and c.lastrowid > 0:
                 self.feed_id: int = c.lastrowid
             else:
-                c.execute("SELECT * FROM feeds WHERE name = ?", self.parent.name)
-                self.feed_id = c.fetchone().rowid
+                c.execute("SELECT rowid FROM feeds WHERE name = ?", (self.parent.name,))
+                self.feed_id = c.fetchone()[0]
+
+    def add(self, cve: CVE):
+        if cve.impact is None:
+            impact_vector = None
+        else:
+            impact_vector = cve.impact.vector
+        self.connection.execute(
+            "INSERT OR REPLACE INTO cves "
+            "(id, feed, published, last_modified, impact_vector, description) "
+            "VALUES (?, ?, ?, ?, ?, ?)", (
+                cve.cve_id, self.feed_id, cve.published_date.timestamp(), cve.last_modified_date.timestamp(),
+                impact_vector, cve.description()
+            )
+        )
 
     def last_modified(self) -> Optional[datetime]:
         c = self.connection.cursor()
-        c.execute("SELECT last_modified FROM feeds WHERE rowid = ?", self.feed_id)
-        return datetime.fromtimestamp(c.fetchone()["last_modified"])
+        c.execute("SELECT last_modified FROM feeds WHERE rowid = ?", (self.feed_id,))
+        row = c.fetchone()
+        if row is None or row[0] is None:
+            return None
+        return datetime.fromtimestamp(row[0])
+
+    def last_checked(self) -> Optional[datetime]:
+        c = self.connection.cursor()
+        c.execute("SELECT last_checked FROM feeds WHERE rowid = ?", (self.feed_id,))
+        row = c.fetchone()
+        if row is None or row[0] is None:
+            return None
+        return datetime.fromtimestamp(row[0])
+
+    def is_out_of_date(self) -> bool:
+        last_checked = self.last_checked()
+        if last_checked is not None and time() - last_checked.timestamp() < UPDATE_INTERVAL_SECONDS:
+            # the data in the DB is new enough:
+            return False
+        else:
+            return super().is_out_of_date()
 
     def reload(self, existing_data: Optional[Data] = None) -> DataSource:
-        return self.parent.reload(existing_data=existing_data)
+        if existing_data is not None and not self.is_out_of_date():
+            return existing_data
+        with tqdm(desc=self.name, unit=" CVEs", leave=False) as t:
+            new_data = self.parent.reload(existing_data)
+            with self.connection as c:
+                c.execute(
+                    "UPDATE feeds SET last_checked = ? WHERE rowid = ?",
+                    (time(), self.feed_id)
+                )
+                if new_data is not existing_data:
+                    c.execute(
+                        "UPDATE feeds SET last_modified = ? WHERE rowid = ?",
+                        (new_data.last_modified_date.timestamp(), self.feed_id)
+                    )
+                    for cve in new_data:
+                        self.add(cve)
+                        t.update(1)
+                    c.commit()
+        return CVEdbDataSource(self)
+
+    def data(self, force_reload: bool = False) -> "CVEdbData":
+        if force_reload:
+            self.reload()
+        return CVEdbData(self)
 
 
 class CVEdbContext:
@@ -88,37 +186,28 @@ class CVEdbContext:
 
 
 class CVEdbData(Data):
-    def __init__(self, db: "CVEdb"):
-        self.db: CVEdb = db
+    def __init__(self, source: Union["CVEdb", DbBackedFeed]):
+        super().__init__(source.last_modified())
+        self.connection: Connection = source.connection
+        if isinstance(source, CVEdb):
+            self.feeds: Iterable[DbBackedFeed] = source.feeds
+        else:
+            self.feeds = [source]
 
     def __iter__(self) -> Iterator[CVE]:
-        c = self.db.connection.cursor()
-        c.execute("SELECT * FROM cves")
-        for cve in c.fetchall():
-            if cve["impact_vector"] is None:
-                impact = None
-            else:
-                try:
-                    impact = CVSS3(cve["impact_vector"])
-                except CVSSError:
-                    try:
-                        impact = CVSS2(cve["impact_vector"])
-                    except CVSSError:
-                        impact = None
-            yield CVE(
-                cve_id=cve["id"],
-                published_date=datetime.fromtimestamp(cve["published"]),
-                last_modified_date=datetime.fromtimestamp(cve["last_modified"]),
-                impact=impact,
-                descriptions=(),  # TODO: Implement descriptions
-                references=(),  # TODO: Implement references
-                assigner=None  # TODO: Implement assigner
-            )
+        self.reload()
+        return itertools.chain(*(iter(CVEdbDataSource(feed)) for feed in self.feeds))
 
     def __len__(self):
-        c = self.db.connection.cursor()
+        self.reload()
+        c = self.connection.cursor()
         c.execute("SELECT COUNT(*) FROM cves")
         return c.fetchone()[0]
+
+    def reload(self):
+        out_of_date_feeds = [feed for feed in self.feeds if feed.is_out_of_date()]
+        for feed in tqdm(out_of_date_feeds, desc="updating", unit=" feeds", leave=False):
+            feed.reload()
 
 
 class CVEdb(Feed):
@@ -128,12 +217,12 @@ class CVEdb(Feed):
         super().__init__("cves")
         if parents is None:
             parents = FEEDS.values()
-        self.parents: List[DbBackedFeed] = [DbBackedFeed(connection, parent) for parent in parents]
+        self.feeds: List[DbBackedFeed] = [DbBackedFeed(connection, parent) for parent in parents]
         self.connection: Connection = connection
 
     def last_modified(self) -> Optional[datetime]:
         newest = None
-        for parent in self.parents:
+        for parent in self.feeds:
             parent_modified = parent.last_modified()
             if parent_modified is not None and (newest is None or parent_modified > newest):
                 newest = parent_modified
@@ -142,8 +231,8 @@ class CVEdb(Feed):
     def data(self, force_reload: bool = False) -> CVEdbData:
         return CVEdbData(self)
 
-    def reload(self, existing_data: Optional[Data] = None) -> DataSource:
-        pass
+    def reload(self, existing_data: Optional[Data] = None) -> CVEdbDataSource:
+        return CVEdbDataSource(self)
 
     @staticmethod
     def open(db_path: Union[str, Path], parents: Optional[Iterable[Feed]] = None) -> CVEdbContext:
