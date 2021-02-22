@@ -23,8 +23,8 @@ class CVE:
     published_date: datetime
     last_modified_date: datetime
     impact: Optional[Union[CVSS3, CVSS2]] = None
-    descriptions: Tuple[Description] = ()
-    references: Tuple[Reference] = ()
+    descriptions: Tuple[Description, ...] = ()
+    references: Tuple[Reference, ...] = ()
     assigner: Optional[str] = None
 
     def description(self, lang: str = "en") -> Optional[str]:

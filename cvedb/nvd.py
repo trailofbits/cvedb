@@ -3,7 +3,7 @@ from datetime import datetime
 from gzip import decompress
 import json
 import sys
-from typing import Any, Dict, Iterable, Optional, TextIO, Union
+from typing import Any, Dict, Iterable, Optional, TextIO, Union, Iterator
 import urllib.request
 
 from cvss import CVSS2, CVSS3
@@ -11,7 +11,7 @@ from dateutil.parser import isoparse
 from tqdm import tqdm
 
 from .cve import CVE, Description, Reference
-from .feed import Data, Feed
+from .feed import Data, DataSource, Feed
 
 BASE_JSON_URL: str = "https://nvd.nist.gov/feeds/json/cve/1.1/nvdcve-1.1-"
 
@@ -65,10 +65,14 @@ class Meta:
         return Meta.loads(stream.read())
 
 
-class JsonData(Data):
-    def __init__(self, cves: Iterable[CVE], meta: Meta):
-        super().__init__(cves, meta.last_modified_date)
+class JsonDataSource(DataSource):
+    def __init__(self, meta: Meta, cves: Iterable[CVE]):
+        super().__init__(meta.last_modified_date)
         self.meta: Meta = meta
+        self.cves: Iterable[CVE] = cves
+
+    def __iter__(self) -> Iterator[CVE]:
+        return iter(self.cves)
 
     @staticmethod
     def parse_cve(cve_obj: Dict[str, Any]) -> CVE:
@@ -107,7 +111,7 @@ class JsonData(Data):
         )
 
     @staticmethod
-    def load(json_obj: Dict[str, Any], meta: Optional[Meta] = None) -> "JsonData":
+    def load(json_obj: Dict[str, Any], meta: Optional[Meta] = None) -> "JsonDataSource":
         for key, expected in (("CVE_data_type", "CVE"), ("CVE_data_format", "MITRE"), ("CVE_data_version", "4.0")):
             if json_obj.get(key, expected) != expected:
                 raise ValueError(f"Expected {key} to be {expected!r} but instead got {json_obj[key]!r}")
@@ -115,9 +119,9 @@ class JsonData(Data):
             if "CVE_data_timestamp" not in json_obj:
                 raise ValueError("If `meta` is None, `json_obj[\"CVE_data_timestamp\"]` must contain a timestamp")
             meta = Meta(datetime.fromisoformat(json_obj["CVE_data_timestamp"]), 0, 0, 0, b"")
-        return JsonData((
-            JsonData.parse_cve(cve_obj) for cve_obj in json_obj.get("CVE_Items", ())
-        ), meta)
+        return JsonDataSource(meta, (
+            JsonDataSource.parse_cve(cve_obj) for cve_obj in json_obj.get("CVE_Items", ())
+        ))
 
 
 def download(url: str, size: Optional[int] = None, show_progress: bool = True) -> bytes:
@@ -140,12 +144,12 @@ def download(url: str, size: Optional[int] = None, show_progress: bool = True) -
 
 
 class JsonFeed(Feed):
-    def __init__(self, name: str, initial_data: Optional[JsonData] = None):
+    def __init__(self, name: str, initial_data: Optional[Data] = None):
         super().__init__(name, initial_data)
         self.meta_url: str = f"{BASE_JSON_URL}{self.name}.meta"
         self.gz_url: str = f"{BASE_JSON_URL}{self.name}.json.gz"
 
-    def reload(self, existing_data: Optional[Data] = None) -> Data:
+    def reload(self, existing_data: Optional[Data] = None) -> DataSource:
         with urllib.request.urlopen(self.meta_url) as req:
             new_meta = Meta.load(req)
         if existing_data is not None and new_meta.last_modified_date <= existing_data.last_modified_date:
@@ -154,4 +158,8 @@ class JsonFeed(Feed):
         compressed = download(self.gz_url, new_meta.gz_size, sys.stderr.isatty())
         decompressed = decompress(compressed)
         data = json.loads(decompressed)
-        return JsonData.load(data, new_meta)
+        return JsonDataSource.load(data, new_meta)
+
+
+for year in range(2002, datetime.now().year + 1):
+    JsonFeed(str(year))
