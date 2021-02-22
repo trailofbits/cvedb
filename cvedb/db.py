@@ -11,6 +11,7 @@ from tqdm import tqdm
 from .cve import CVE
 from .feed import Data, DataSource, Feed, FEEDS, MAX_DATA_AGE_SECONDS
 
+DEFAULT_DB_PATH = Path.home() / ".config" / "cvedb" / "cvedb.sqlite"
 
 UPDATE_INTERVAL_SECONDS: int = MAX_DATA_AGE_SECONDS
 
@@ -235,5 +236,5 @@ class CVEdb(Feed):
         return CVEdbDataSource(self)
 
     @staticmethod
-    def open(db_path: Union[str, Path], parents: Optional[Iterable[Feed]] = None) -> CVEdbContext:
+    def open(db_path: Union[str, Path] = DEFAULT_DB_PATH, parents: Optional[Iterable[Feed]] = None) -> CVEdbContext:
         return CVEdbContext(db_path, parents)
