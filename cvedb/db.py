@@ -31,6 +31,7 @@ CVE_TABLE_CREATE = (
     "published INTEGER NOT NULL, "
     "last_modified INTEGER NOT NULL, "
     "impact_vector VARCHAR NULL, "
+    "base_score REAL NULL, "
     "PRIMARY KEY (id, feed)"
     ")"
 )
@@ -42,6 +43,7 @@ DESCRIPTIONS_TABLE_CREATE = (
     "description VARCHAR NOT NULL"
     ")"
 )
+
 
 class CVEdbDataSource(DataSource):
     def __init__(self, source: Union["DbBackedFeed", "CVEdb"]):
@@ -112,15 +114,17 @@ class DbBackedFeed(Feed):
     def add(self, cve: CVE):
         if cve.impact is None:
             impact_vector = None
+            base_score = None
         else:
             impact_vector = cve.impact.vector
+            base_score = cve.impact.base_score
         with self.connection as c:
             c.execute(
                 "INSERT OR REPLACE INTO cves "
-                "(id, feed, published, last_modified, impact_vector) "
-                "VALUES (?, ?, ?, ?, ?)", (
+                "(id, feed, published, last_modified, impact_vector, base_score) "
+                "VALUES (?, ?, ?, ?, ?, ?)", (
                     cve.cve_id, self.feed_id, cve.published_date.astimezone().timestamp(),
-                    cve.last_modified_date.astimezone().timestamp(), impact_vector
+                    cve.last_modified_date.astimezone().timestamp(), impact_vector, base_score
                 )
             )
             for description in cve.descriptions:
@@ -289,7 +293,7 @@ class CVEdbData(Data):
                 elif s == Sort.PUBLISHED_DATE:
                     components.append("c.published")
                 elif s == Sort.IMPACT:
-                    raise NotImplementedError("Sorting by impact is not yet supported in the dabatase!")
+                    components.append("c.base_score")
                 components[-1] = f"{components[-1]} {asc}"
             order_by = f"ORDER BY {', '.join(components)}"
         c.execute("SELECT DISTINCT c.* FROM descriptions d INNER JOIN cves c ON d.cve = c.id "

@@ -50,7 +50,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("SEARCH_TERM", type=str, nargs="*", help="search terms to query")
     parser.add_argument("--database", "-db", type=str, nargs="?", default=DEFAULT_DB_PATH,
                         help=f"alternative path to load/store the database (default is {DEFAULT_DB_PATH!s})")
-    parser.add_argument("--sort", "-s", nargs="*", default=("cve",), choices=("cve", "modified", "published"),
+    parser.add_argument("--sort", "-s", nargs="*", default=("cve",), choices=("cve", "modified", "published", "impact"),
                         help="how to sort the results (default is by CVE ID only)")
     parser.add_argument("--descending", "-d", action="store_true",
                         help="reverse the ordering of results (default is ascending)")
@@ -80,6 +80,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                         sorts.append(Sort.LAST_MODIFIED_DATE)
                     elif sort == "published":
                         sorts.append(Sort.PUBLISHED_DATE)
+                    elif sort == "impact":
+                        sorts.append(Sort.IMPACT)
                 for cve in db.data().search(*args.SEARCH_TERM, sort=sorts, ascending=not args.descending):
                     print_cve(cve)
     except (KeyboardInterrupt, BrokenPipeError):

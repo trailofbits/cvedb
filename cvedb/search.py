@@ -14,7 +14,7 @@ class Sort(Enum):
 
     def get_key(self, cve: CVE) -> Any:
         if self == Sort.IMPACT:
-            return cve.impact.scores()
+            return cve.impact.base_score
         return getattr(cve, self.name.lower())
 
 
