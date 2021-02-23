@@ -208,7 +208,7 @@ class CVEdbData(Data):
     def reload(self):
         out_of_date_feeds = [feed for feed in self.feeds if feed.is_out_of_date()]
         for feed in tqdm(out_of_date_feeds, desc="updating", unit=" feeds", leave=False):
-            feed.reload()
+            feed.reload(feed.data())
 
 
 class CVEdb(Feed):

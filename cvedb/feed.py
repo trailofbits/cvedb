@@ -2,9 +2,10 @@ from abc import ABC, abstractmethod
 from collections.abc import Hashable, Iterable as IterableABC, Sized
 from datetime import datetime
 import time
-from typing import Dict, FrozenSet, Iterable, Iterator, Optional
+from typing import Dict, FrozenSet, Iterable, Iterator, Optional, Union
 
 from .cve import CVE
+from .search import OrQuery, SearchQuery, TermQuery
 
 MAX_DATA_AGE_SECONDS: int = 14400  # 4 hours
 
@@ -24,7 +25,17 @@ class DataSource(ABC, Hashable, IterableABC[CVE]):
 
 
 class Data(DataSource, Sized, ABC):
-    pass
+    def search(self, *queries: Union[str, SearchQuery]) -> Iterator[CVE]:
+        sq = []
+        for query in queries:
+            if isinstance(query, SearchQuery):
+                sq.append(query)
+            else:
+                sq.append(TermQuery(str(query)))
+        or_query = OrQuery(*sq)
+        for cve in self:
+            if or_query.matches(cve):
+                yield cve
 
 
 class InMemoryData(Data):
