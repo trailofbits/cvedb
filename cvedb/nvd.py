@@ -152,7 +152,8 @@ class JsonFeed(Feed):
     def reload(self, existing_data: Optional[Data] = None) -> DataSource:
         with urllib.request.urlopen(self.meta_url) as req:
             new_meta = Meta.load(req)
-        if existing_data is not None and new_meta.last_modified_date <= existing_data.last_modified_date:
+        if existing_data is not None and existing_data.last_modified_date is not None and \
+                new_meta.last_modified_date <= existing_data.last_modified_date:
             # the existing data is newer
             return existing_data
         compressed = download(self.gz_url, new_meta.gz_size, sys.stderr.isatty())

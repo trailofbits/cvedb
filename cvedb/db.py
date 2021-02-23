@@ -8,7 +8,7 @@ from typing import Iterable, Iterator, List, Optional, Union
 from cvss import CVSS2, CVSS3, CVSSError
 from tqdm import tqdm
 
-from .cve import CVE
+from .cve import CVE, Description
 from .feed import Data, DataSource, Feed, FEEDS, MAX_DATA_AGE_SECONDS
 
 DEFAULT_DB_PATH = Path.home() / ".config" / "cvedb" / "cvedb.sqlite"
@@ -30,8 +30,15 @@ CVE_TABLE_CREATE = (
     "published INTEGER NOT NULL, "
     "last_modified INTEGER NOT NULL, "
     "impact_vector VARCHAR NULL, "
-    "description VARCHAR NULL, "
     "PRIMARY KEY (id, feed)"
+    ")"
+)
+
+DESCRIPTIONS_TABLE_CREATE = (
+    "CREATE TABLE IF NOT EXISTS descriptions("
+    "cve REFERENCES cves (id) NOT NULL, "
+    "lang VARCHAR NOT NULL DEFAULT \"en\", "
+    "description VARCHAR NOT NULL"
     ")"
 )
 
@@ -50,7 +57,7 @@ class CVEdbDataSource(DataSource):
         where_clause = " OR ".join(["feed = ?"] * len(self.feeds))
         params = tuple(feed.feed_id for feed in self.feeds)
         c.execute(f"SELECT * FROM cves WHERE {where_clause}", params)
-        for cve_id, _, published, last_modified, impact_vector, _ in c.fetchall():
+        for cve_id, _, published, last_modified, impact_vector in c.fetchall():
             if impact_vector is None:
                 impact = None
             else:
@@ -61,12 +68,15 @@ class CVEdbDataSource(DataSource):
                         impact = CVSS2(impact_vector)
                     except CVSSError:
                         impact = None
+            d = self.connection.cursor()
+            d.execute(f"SELECT lang, description FROM descriptions WHERE cve = ?", (cve_id,))
+            descriptions = tuple(Description(lang, desc) for lang, desc in d.fetchall())
             yield CVE(
                 cve_id=cve_id,
                 published_date=datetime.fromtimestamp(published),
                 last_modified_date=datetime.fromtimestamp(last_modified),
                 impact=impact,
-                descriptions=(),  # TODO: Implement descriptions
+                descriptions=descriptions,
                 references=(),  # TODO: Implement references
                 assigner=None  # TODO: Implement assigner
             )
@@ -82,6 +92,7 @@ class DbBackedFeed(Feed):
         with self.connection:
             self.connection.execute(FEED_TABLE_CREATE)
             self.connection.execute(CVE_TABLE_CREATE)
+            self.connection.execute(DESCRIPTIONS_TABLE_CREATE)
             c = self.connection.cursor()
             c.execute(f"INSERT OR IGNORE INTO feeds (name) VALUES (?)", (parent.name,))
             if c.lastrowid is not None and c.lastrowid > 0:
@@ -95,14 +106,23 @@ class DbBackedFeed(Feed):
             impact_vector = None
         else:
             impact_vector = cve.impact.vector
-        self.connection.execute(
-            "INSERT OR REPLACE INTO cves "
-            "(id, feed, published, last_modified, impact_vector, description) "
-            "VALUES (?, ?, ?, ?, ?, ?)", (
-                cve.cve_id, self.feed_id, cve.published_date.timestamp(), cve.last_modified_date.timestamp(),
-                impact_vector, cve.description()
+        with self.connection as c:
+            c.execute(
+                "INSERT OR REPLACE INTO cves "
+                "(id, feed, published, last_modified, impact_vector) "
+                "VALUES (?, ?, ?, ?, ?)", (
+                    cve.cve_id, self.feed_id, cve.published_date.timestamp(), cve.last_modified_date.timestamp(),
+                    impact_vector
+                )
             )
-        )
+            for description in cve.descriptions:
+                c.execute(
+                    "INSERT OR REPLACE INTO descriptions "
+                    "(cve, lang, description) "
+                    "VALUES (?, ?, ?)", (
+                        cve.cve_id, description.lang, description.value
+                    )
+                )
 
     def last_modified(self) -> Optional[datetime]:
         c = self.connection.cursor()
