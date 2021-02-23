@@ -1,5 +1,6 @@
 import argparse
 from pathlib import Path
+import pkg_resources
 from shutil import get_terminal_size
 import sqlite3
 import sys
@@ -10,6 +11,10 @@ from .db import CVEdb, DEFAULT_DB_PATH
 
 
 CVE_ID_WIDTH: int = 16
+
+
+def version() -> str:
+    return pkg_resources.require("it-depends")[0].version
 
 
 def print_cve(cve: CVE):
@@ -36,7 +41,7 @@ def print_cve(cve: CVE):
         print(f"{cve.cve_id}\t{cve.description()}")
 
 
-def main(argv: Optional[List[str]] = None):
+def main(argv: Optional[List[str]] = None) -> int:
     if argv is None:
         argv = sys.argv
 
@@ -44,8 +49,16 @@ def main(argv: Optional[List[str]] = None):
     parser.add_argument("SEARCH_TERM", type=str, nargs="*", help="search terms to query")
     parser.add_argument("--database", "-db", type=str, nargs="?", default=DEFAULT_DB_PATH,
                         help=f"alternative path to load/store the database (default is {DEFAULT_DB_PATH!s})")
+    parser.add_argument("--version", "-v", action="store_true", help="print the version and exit")
 
     args = parser.parse_args(argv[1:])
+
+    if args.version:
+        if sys.stdout.isatty():
+            print(f"cvedb version {version()}")
+        else:
+            print(version())
+        return 0
 
     try:
         with CVEdb.open(args.database) as db:
@@ -57,4 +70,4 @@ def main(argv: Optional[List[str]] = None):
                 for cve in db.data().search(*args.SEARCH_TERM):
                     print_cve(cve)
     except KeyboardInterrupt:
-        sys.exit(1)
+        return 1
