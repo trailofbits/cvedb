@@ -14,6 +14,9 @@ setup(
         "python-dateutil~=2.8.1",
         "tqdm~=4.48.0"
     ],
+    extras_require={
+        "dev": ["flake8", "pytest", "twine"]
+    },
     entry_points={
         "console_scripts": [
             "cvedb = cvedb.__main__:main"
