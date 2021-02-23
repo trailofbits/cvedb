@@ -43,7 +43,6 @@ DESCRIPTIONS_TABLE_CREATE = (
     ")"
 )
 
-
 class CVEdbDataSource(DataSource):
     def __init__(self, source: Union["DbBackedFeed", "CVEdb"]):
         super().__init__(source.last_modified())
@@ -95,10 +94,14 @@ class DbBackedFeed(Feed):
         self.parent: Feed = parent
         self.connection: Connection = connection
         with self.connection:
+            c = self.connection.cursor()
+            c.execute("PRAGMA user_version")
+            self.schema_version: int = c.fetchone()[0]
+            if self.schema_version > 0:
+                raise ValueError(f"Database is using schema version {self.schema_version}, but expected at most 0")
             self.connection.execute(FEED_TABLE_CREATE)
             self.connection.execute(CVE_TABLE_CREATE)
             self.connection.execute(DESCRIPTIONS_TABLE_CREATE)
-            c = self.connection.cursor()
             c.execute(f"INSERT OR IGNORE INTO feeds (name) VALUES (?)", (parent.name,))
             if c.lastrowid is not None and c.lastrowid > 0:
                 self.feed_id: int = c.lastrowid
