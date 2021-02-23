@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from collections.abc import Hashable, Iterable as IterableABC, Sized
 from datetime import datetime
+from sys import version_info
 import time
 from typing import Dict, FrozenSet, Iterable, Iterator, Optional, Union
 
@@ -10,7 +11,14 @@ from .search import OrQuery, SearchQuery, TermQuery
 MAX_DATA_AGE_SECONDS: int = 14400  # 4 hours
 
 
-class DataSource(ABC, Hashable, IterableABC[CVE]):
+if version_info < (3, 9):
+    # collections.abc.Iterable didn't become subscriptable until Python 3.9
+    IterableCVE = IterableABC
+else:
+    IterableCVE = IterableABC[CVE]
+
+
+class DataSource(ABC, Hashable, IterableCVE):
     def __init__(self, last_modified_date: datetime):
         self.last_modified_date: datetime = last_modified_date
 
