@@ -1,4 +1,12 @@
 from setuptools import setup, find_packages
+from sys import version_info
+
+extra_requires = []
+
+if version_info < (3, 7):
+    # dataclasses were added in Python 3.7, so use this backport for earlier versions of Python
+    extra_requires.append("dataclasses~=0.8")
+
 
 setup(
     name="cvedb",
@@ -13,7 +21,7 @@ setup(
         "cvss~=2.2",
         "python-dateutil~=2.8.1",
         "tqdm~=4.48.0"
-    ],
+    ] + extra_requires,
     extras_require={
         "dev": ["flake8", "pytest", "twine"]
     },
