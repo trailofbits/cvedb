@@ -117,7 +117,7 @@ class DbBackedFeed(Feed):
             base_score = None
         else:
             impact_vector = cve.impact.vector
-            base_score = cve.impact.base_score
+            base_score = float(cve.impact.base_score)
         with self.connection as c:
             c.execute(
                 "INSERT OR REPLACE INTO cves "
