@@ -11,7 +11,7 @@ from .db import CVEdb, DEFAULT_DB_PATH
 from .search import Sort
 
 
-CVE_ID_WIDTH: int = 16
+CVE_ID_WIDTH: int = 17
 
 
 def version() -> str:
