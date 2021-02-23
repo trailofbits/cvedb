@@ -270,6 +270,7 @@ class CVEdbData(Data):
             sort: Iterable[Sort] = (Sort.CVE_ID,),
             ascending: bool = True
     ) -> Iterator[CVE]:
+        self.reload()
         query = Data.make_query(*queries)
         query_string, query_params = CVEdbData._to_sql_clause(query)
         if query_string is None or query_params is None:
