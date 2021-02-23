@@ -6,7 +6,7 @@ import sqlite3
 import sys
 from typing import List, Optional
 
-from .cve import CVE
+from .cve import CVE, Severity
 from .db import CVEdb, DEFAULT_DB_PATH
 from .search import Sort
 
@@ -17,6 +17,15 @@ CVE_ID_WIDTH: int = 17
 def version() -> str:
     return pkg_resources.require("it-depends")[0].version
 
+
+SEVERITY_COLORS = {
+    Severity.UNKNOWN:  "\033[34;1m",  # Blue
+    Severity.NONE:     "\033[37;1m",  # White
+    Severity.LOW:      "\033[36;1m",  # Cyan
+    Severity.MEDIUM:   "\033[33;1m",  # Yellow
+    Severity.HIGH:     "\033[31;1m",  # Red
+    Severity.CRITICAL: "\033[35;1m"   # Magenta
+}
 
 def print_cve(cve: CVE):
     if sys.stdout.isatty() and sys.stderr.isatty():
@@ -35,9 +44,21 @@ def print_cve(cve: CVE):
         cve_id = cve.cve_id
         if len(cve_id) < CVE_ID_WIDTH:
             cve_id = f"{cve_id}{' ' * (CVE_ID_WIDTH - len(cve_id))}"
-        print(f"{cve_id}\033[3m{lines[0]}\033[23m")
-        for line in lines[1:]:
-            print(f"{' ' * CVE_ID_WIDTH}\033[3m{line}\033[23m")
+        color = SEVERITY_COLORS[cve.severity]
+        print(f"{color}{cve_id}\033[0m\033[3m{lines[0]}\033[23m")
+        if len(lines) < 3:
+            lines += [""] * (3 - len(lines))
+        for i, line in enumerate(lines[1:]):
+            if i == 0:
+                prefix = cve.severity.name
+            elif i == 1 and cve.impact is not None:
+                prefix = f"Impact: {cve.impact.base_score:.1f}"
+            else:
+                prefix = " " * CVE_ID_WIDTH
+            if len(prefix) < CVE_ID_WIDTH:
+                prefix += " " * (CVE_ID_WIDTH - len(prefix))
+            print(f"{color}{prefix}\033[0m\033[3m{line}\033[23m")
+        print()
     else:
         print(f"{cve.cve_id}\t{cve.description()}")
 
