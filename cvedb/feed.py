@@ -3,10 +3,10 @@ from collections.abc import Hashable, Iterable as IterableABC, Sized
 from datetime import datetime
 from sys import version_info
 import time
-from typing import Dict, FrozenSet, Iterable, Iterator, Optional, Union
+from typing import Any, Callable, Dict, FrozenSet, Iterable, Iterator, Optional, Tuple, Union
 
 from .cve import CVE
-from .search import OrQuery, SearchQuery, TermQuery
+from .search import OrQuery, SearchQuery, Sort, TermQuery
 
 MAX_DATA_AGE_SECONDS: int = 14400  # 4 hours
 
@@ -46,9 +46,21 @@ class Data(DataSource, Sized, ABC):
         else:
             return OrQuery(*sq)
 
-    def search(self, *queries: Union[str, SearchQuery]) -> Iterator[CVE]:
+    @staticmethod
+    def sort_key(*sorts: Sort) -> Callable[[CVE], Tuple[Any, ...]]:
+        def get_key(cve: CVE):
+            return tuple(sort.get_key(cve) for sort in sorts)
+
+        return get_key
+
+    def search(
+            self,
+            *queries: Union[str, SearchQuery],
+            sort: Iterable[Sort] = (Sort.CVE_ID,),
+            ascending: bool = True
+    ) -> Iterator[CVE]:
         query = Data.make_query(*queries)
-        for cve in self:
+        for cve in sorted(self, key=Data.sort_key(sort), reverse=not ascending):
             if query.matches(cve):
                 yield cve
 

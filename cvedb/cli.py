@@ -8,6 +8,7 @@ from typing import List, Optional
 
 from .cve import CVE
 from .db import CVEdb, DEFAULT_DB_PATH
+from .search import Sort
 
 
 CVE_ID_WIDTH: int = 16
@@ -49,6 +50,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("SEARCH_TERM", type=str, nargs="*", help="search terms to query")
     parser.add_argument("--database", "-db", type=str, nargs="?", default=DEFAULT_DB_PATH,
                         help=f"alternative path to load/store the database (default is {DEFAULT_DB_PATH!s})")
+    parser.add_argument("--sort", "-s", nargs="*", default=("cve",), choices=("cve", "modified", "published"),
+                        help="how to sort the results (default is by CVE ID only)")
+    parser.add_argument("--descending", "-d", action="store_true",
+                        help="reverse the ordering of results (default is ascending)")
     parser.add_argument("--version", "-v", action="store_true", help="print the version and exit")
 
     args = parser.parse_args(argv[1:])
@@ -67,7 +72,15 @@ def main(argv: Optional[List[str]] = None) -> int:
                 for cve in db.data():
                     print_cve(cve)
             else:
-                for cve in db.data().search(*args.SEARCH_TERM):
+                sorts = []
+                for sort in args.sort:
+                    if sort == "cve":
+                        sorts.append(Sort.CVE_ID)
+                    elif sort == "modified":
+                        sorts.append(Sort.LAST_MODIFIED_DATE)
+                    elif sort == "published":
+                        sorts.append(Sort.PUBLISHED_DATE)
+                for cve in db.data().search(*args.SEARCH_TERM, sort=sorts, ascending=not args.descending):
                     print_cve(cve)
     except KeyboardInterrupt:
         return 1

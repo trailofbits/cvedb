@@ -1,7 +1,21 @@
 from abc import ABC, abstractmethod
-from typing import Tuple
+from enum import Enum
+from typing import Any, Tuple
 
 from .cve import CVE
+
+
+class Sort(Enum):
+    CVE_ID = 0
+    DESCRIPTION = 1
+    PUBLISHED_DATE = 2
+    LAST_MODIFIED_DATE = 3
+    IMPACT = 4
+
+    def get_key(self, cve: CVE) -> Any:
+        if self == Sort.IMPACT:
+            return cve.impact.scores()
+        return getattr(cve, self.name.lower())
 
 
 class SearchQuery(ABC):

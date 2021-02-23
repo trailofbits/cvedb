@@ -10,7 +10,7 @@ from tqdm import tqdm
 
 from .cve import CVE, Description
 from .feed import Data, DataSource, Feed, FEEDS, MAX_DATA_AGE_SECONDS
-from .search import AndQuery, CompoundQuery, OrQuery, SearchQuery, TermQuery
+from .search import AndQuery, CompoundQuery, OrQuery, SearchQuery, Sort, TermQuery
 
 DEFAULT_DB_PATH = Path.home() / ".config" / "cvedb" / "cvedb.sqlite"
 
@@ -260,7 +260,12 @@ class CVEdbData(Data):
         else:
             return None, None
 
-    def search(self, *queries: Union[str, SearchQuery]) -> Iterator[CVE]:
+    def search(
+            self,
+            *queries: Union[str, SearchQuery],
+            sort: Iterable[Sort] = (Sort.CVE_ID,),
+            ascending: bool = True
+    ) -> Iterator[CVE]:
         query = Data.make_query(*queries)
         query_string, query_params = CVEdbData._to_sql_clause(query)
         if query_string is None or query_params is None:
@@ -270,8 +275,25 @@ class CVEdbData(Data):
         params = [feed.feed_id for feed in self.feeds]
         c = self.connection.cursor()
         params.extend(query_params)
+        order_by = ""
+        if sort:
+            components = []
+            asc = ["DESC", "ASC"][ascending]
+            for s in sort:
+                if s == Sort.CVE_ID:
+                    components.append("c.id")
+                elif s == Sort.DESCRIPTION:
+                    components.append("d.description")
+                elif s == Sort.LAST_MODIFIED_DATE:
+                    components.append("c.last_modified")
+                elif s == Sort.PUBLISHED_DATE:
+                    components.append("c.published")
+                elif s == Sort.IMPACT:
+                    raise NotImplementedError("Sorting by impact is not yet supported in the dabatase!")
+                components[-1] = f"{components[-1]} {asc}"
+            order_by = f"ORDER BY {', '.join(components)}"
         c.execute("SELECT DISTINCT c.* FROM descriptions d INNER JOIN cves c ON d.cve = c.id "
-                  f"WHERE {feeds_where_clause} AND {query_string} ORDER BY c.id",
+                  f"WHERE {feeds_where_clause} AND {query_string} {order_by}",
                   params
         )
         yield from CVEdbDataSource.cve_iter(self.connection, c.fetchall())
