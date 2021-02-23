@@ -10,7 +10,7 @@ from tqdm import tqdm
 
 from .cve import CVE, Description
 from .feed import Data, DataSource, Feed, FEEDS, MAX_DATA_AGE_SECONDS
-from .search import SearchQuery, TermQuery
+from .search import AndQuery, CompoundQuery, OrQuery, SearchQuery, TermQuery
 
 DEFAULT_DB_PATH = Path.home() / ".config" / "cvedb" / "cvedb.sqlite"
 
@@ -230,22 +230,45 @@ class CVEdbData(Data):
         c.execute("SELECT COUNT(*) FROM cves")
         return c.fetchone()[0]
 
-    def search(self, *queries: Union[str, SearchQuery]) -> Iterator[CVE]:
-        query = Data.make_query(*queries)
+    @staticmethod
+    def _to_sql_clause(query: SearchQuery) -> Tuple[Optional[str], Optional[Tuple[str, ...]]]:
         if isinstance(query, TermQuery):
             query_text = query.query
             description_query = "d.description"
             if not query.case_sensitive:
                 query_text = query_text.upper()
                 description_query = f"UPPER({description_query})"
+            return f"{description_query} LIKE ?", (f"%{query_text}%",)
+        elif isinstance(query, CompoundQuery):
+            if len(query.sub_queries) == 0:
+                return ["true", "false"][isinstance(query, OrQuery)], ()
+            elif len(query.sub_queries) == 1:
+                return CVEdbData._to_sql_clause(query.sub_queries[0])
+            components = []
+            params = []
+            for sub_query in query.sub_queries:
+                c, p = CVEdbData._to_sql_clause(sub_query)
+                if c is None or p is None:
+                    return None, None
+                components.append(c)
+                params.extend(p)
+            compound_query = [" AND ", " OR "][isinstance(query, OrQuery)].join(components)
+            return f"({compound_query})", tuple(params)
         else:
+            return None, None
+
+    def search(self, *queries: Union[str, SearchQuery]) -> Iterator[CVE]:
+        query = Data.make_query(*queries)
+        query_string, query_params = CVEdbData._to_sql_clause(query)
+        if query_string is None or query_params is None:
+            # the query could not be converted to a SQL query
             return super().search(query)
         feeds_where_clause = f"c.feed IN ({', '.join('?' * len(self.feeds)) })"
         params = [feed.feed_id for feed in self.feeds]
         c = self.connection.cursor()
-        params.append(f"%{query_text}%")
-        c.execute("SELECT c.* FROM descriptions d INNER JOIN cves c ON d.cve = c.id "
-                  f"WHERE {feeds_where_clause} AND {description_query} LIKE ? ORDER BY c.id",
+        params.extend(query_params)
+        c.execute("SELECT DISTINCT c.* FROM descriptions d INNER JOIN cves c ON d.cve = c.id "
+                  f"WHERE {feeds_where_clause} AND {query_string} ORDER BY c.id",
                   params
         )
         yield from CVEdbDataSource.cve_iter(self.connection, c.fetchall())
