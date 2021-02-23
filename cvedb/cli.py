@@ -82,5 +82,5 @@ def main(argv: Optional[List[str]] = None) -> int:
                         sorts.append(Sort.PUBLISHED_DATE)
                 for cve in db.data().search(*args.SEARCH_TERM, sort=sorts, ascending=not args.descending):
                     print_cve(cve)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, BrokenPipeError):
         return 1
