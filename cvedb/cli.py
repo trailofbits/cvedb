@@ -1,5 +1,6 @@
 import argparse
 from pathlib import Path
+from shutil import get_terminal_size
 import sqlite3
 import sys
 from typing import List, Optional
@@ -8,8 +9,31 @@ from .cve import CVE
 from .db import CVEdb, DEFAULT_DB_PATH
 
 
+CVE_ID_WIDTH: int = 16
+
+
 def print_cve(cve: CVE):
-    print(f"{cve.cve_id:16}\033[3m{cve.description()}\033[23m")
+    if sys.stdout.isatty() and sys.stderr.isatty():
+        columns = get_terminal_size((80, 20)).columns
+        desc_words = cve.description().split(" ")
+        lines = [""]
+        for word in desc_words:
+            if lines[-1]:
+                new_line = f"{lines[-1]} {word}"
+                if len(new_line) + CVE_ID_WIDTH > columns:
+                    new_line = word
+                    lines.append("")
+            else:
+                new_line = word
+            lines[-1] = new_line
+        cve_id = cve.cve_id
+        if len(cve_id) < CVE_ID_WIDTH:
+            cve_id = f"{cve_id}{' ' * (CVE_ID_WIDTH - len(cve_id))}"
+        print(f"{cve_id}\033[3m{lines[0]}\033[23m")
+        for line in lines[1:]:
+            print(f"{' ' * CVE_ID_WIDTH}\033[3m{line}\033[23m")
+    else:
+        print(f"{cve.cve_id}\t{cve.description()}")
 
 
 def main(argv: Optional[List[str]] = None):
@@ -23,11 +47,14 @@ def main(argv: Optional[List[str]] = None):
 
     args = parser.parse_args(argv[1:])
 
-    with CVEdb.open(args.database) as db:
-        if not args.SEARCH_TERM:
-            # just print all of the CVEs
-            for cve in db.data():
-                print_cve(cve)
-        else:
-            for cve in db.data().search(*args.SEARCH_TERM):
-                print_cve(cve)
+    try:
+        with CVEdb.open(args.database) as db:
+            if not args.SEARCH_TERM:
+                # just print all of the CVEs
+                for cve in db.data():
+                    print_cve(cve)
+            else:
+                for cve in db.data().search(*args.SEARCH_TERM):
+                    print_cve(cve)
+    except KeyboardInterrupt:
+        sys.exit(1)
