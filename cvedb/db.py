@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, tzinfo
 import itertools
 from pathlib import Path
 from sqlite3 import connect, Connection
@@ -70,8 +70,8 @@ class CVEdbDataSource(DataSource):
             descriptions = tuple(Description(lang, desc) for lang, desc in d.fetchall())
             yield CVE(
                 cve_id=cve_id,
-                published_date=datetime.fromtimestamp(published),
-                last_modified_date=datetime.fromtimestamp(last_modified),
+                published_date=datetime.utcfromtimestamp(published),
+                last_modified_date=datetime.utcfromtimestamp(last_modified),
                 impact=impact,
                 descriptions=descriptions,
                 references=(),  # TODO: Implement references
@@ -119,8 +119,8 @@ class DbBackedFeed(Feed):
                 "INSERT OR REPLACE INTO cves "
                 "(id, feed, published, last_modified, impact_vector) "
                 "VALUES (?, ?, ?, ?, ?)", (
-                    cve.cve_id, self.feed_id, cve.published_date.timestamp(), cve.last_modified_date.timestamp(),
-                    impact_vector
+                    cve.cve_id, self.feed_id, cve.published_date.astimezone().timestamp(),
+                    cve.last_modified_date.astimezone().timestamp(), impact_vector
                 )
             )
             for description in cve.descriptions:
@@ -138,7 +138,7 @@ class DbBackedFeed(Feed):
         row = c.fetchone()
         if row is None or row[0] is None:
             return None
-        return datetime.fromtimestamp(row[0])
+        return datetime.utcfromtimestamp(row[0])
 
     def last_checked(self) -> Optional[datetime]:
         c = self.connection.cursor()
@@ -146,7 +146,7 @@ class DbBackedFeed(Feed):
         row = c.fetchone()
         if row is None or row[0] is None:
             return None
-        return datetime.fromtimestamp(row[0])
+        return datetime.utcfromtimestamp(row[0])
 
     def is_out_of_date(self) -> bool:
         last_checked = self.last_checked()
@@ -164,12 +164,12 @@ class DbBackedFeed(Feed):
             with self.connection as c:
                 c.execute(
                     "UPDATE feeds SET last_checked = ? WHERE rowid = ?",
-                    (time(), self.feed_id)
+                    (datetime.fromtimestamp(time()).astimezone().timestamp(), self.feed_id)
                 )
                 if new_data is not existing_data:
                     c.execute(
                         "UPDATE feeds SET last_modified = ? WHERE rowid = ?",
-                        (new_data.last_modified_date.timestamp(), self.feed_id)
+                        (new_data.last_modified_date.astimezone().timestamp(), self.feed_id)
                     )
                     for cve in new_data:
                         self.add(cve)
