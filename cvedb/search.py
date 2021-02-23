@@ -11,6 +11,7 @@ class Sort(Enum):
     PUBLISHED_DATE = 2
     LAST_MODIFIED_DATE = 3
     IMPACT = 4
+    SEVERITY = 5
 
     def get_key(self, cve: CVE) -> Any:
         if self == Sort.IMPACT:

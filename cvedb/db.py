@@ -32,6 +32,7 @@ CVE_TABLE_CREATE = (
     "last_modified INTEGER NOT NULL, "
     "impact_vector VARCHAR NULL, "
     "base_score REAL NULL, "
+    "severity INTEGER NOT NULL, "
     "PRIMARY KEY (id, feed)"
     ")"
 )
@@ -121,10 +122,10 @@ class DbBackedFeed(Feed):
         with self.connection as c:
             c.execute(
                 "INSERT OR REPLACE INTO cves "
-                "(id, feed, published, last_modified, impact_vector, base_score) "
-                "VALUES (?, ?, ?, ?, ?, ?)", (
+                "(id, feed, published, last_modified, impact_vector, base_score, severity) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)", (
                     cve.cve_id, self.feed_id, cve.published_date.astimezone().timestamp(),
-                    cve.last_modified_date.astimezone().timestamp(), impact_vector, base_score
+                    cve.last_modified_date.astimezone().timestamp(), impact_vector, base_score, int(cve.severity)
                 )
             )
             for description in cve.descriptions:
@@ -295,6 +296,10 @@ class CVEdbData(Data):
                     components.append("c.published")
                 elif s == Sort.IMPACT:
                     components.append("c.base_score")
+                elif s == Sort.SEVERITY:
+                    components.append("c.severity")
+                else:
+                    raise NotImplementedError(f"TODO: Add support for {s!r}")
                 components[-1] = f"{components[-1]} {asc}"
             order_by = f"ORDER BY {', '.join(components)}"
         c.execute("SELECT DISTINCT c.* FROM descriptions d INNER JOIN cves c ON d.cve = c.id "
