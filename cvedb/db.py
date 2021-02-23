@@ -3,13 +3,14 @@ import itertools
 from pathlib import Path
 from sqlite3 import connect, Connection
 from time import time
-from typing import Iterable, Iterator, List, Optional, Union
+from typing import Any, Iterable, Iterator, List, Optional, Tuple, Union
 
 from cvss import CVSS2, CVSS3, CVSSError
 from tqdm import tqdm
 
 from .cve import CVE, Description
 from .feed import Data, DataSource, Feed, FEEDS, MAX_DATA_AGE_SECONDS
+from .search import SearchQuery, TermQuery
 
 DEFAULT_DB_PATH = Path.home() / ".config" / "cvedb" / "cvedb.sqlite"
 
@@ -52,12 +53,9 @@ class CVEdbDataSource(DataSource):
         else:
             self.feeds = [source]
 
-    def __iter__(self) -> Iterator[CVE]:
-        c = self.connection.cursor()
-        where_clause = " OR ".join(["feed = ?"] * len(self.feeds))
-        params = tuple(feed.feed_id for feed in self.feeds)
-        c.execute(f"SELECT * FROM cves WHERE {where_clause}", params)
-        for cve_id, _, published, last_modified, impact_vector in c.fetchall():
+    @staticmethod
+    def cve_iter(connection: Connection, rows: Iterator[Tuple[str, ...]]) -> Iterator[CVE]:
+        for cve_id, _, published, last_modified, impact_vector, *_ in rows:
             if impact_vector is None:
                 impact = None
             else:
@@ -68,7 +66,7 @@ class CVEdbDataSource(DataSource):
                         impact = CVSS2(impact_vector)
                     except CVSSError:
                         impact = None
-            d = self.connection.cursor()
+            d = connection.cursor()
             d.execute(f"SELECT lang, description FROM descriptions WHERE cve = ?", (cve_id,))
             descriptions = tuple(Description(lang, desc) for lang, desc in d.fetchall())
             yield CVE(
@@ -80,6 +78,13 @@ class CVEdbDataSource(DataSource):
                 references=(),  # TODO: Implement references
                 assigner=None  # TODO: Implement assigner
             )
+
+    def __iter__(self) -> Iterator[CVE]:
+        c = self.connection.cursor()
+        where_clause = " OR ".join(["feed = ?"] * len(self.feeds))
+        params = tuple(feed.feed_id for feed in self.feeds)
+        c.execute(f"SELECT * FROM cves WHERE {where_clause}", params)
+        yield from CVEdbDataSource.cve_iter(self.connection, c.fetchall())
 
 
 class DbBackedFeed(Feed):
@@ -224,6 +229,26 @@ class CVEdbData(Data):
         c = self.connection.cursor()
         c.execute("SELECT COUNT(*) FROM cves")
         return c.fetchone()[0]
+
+    def search(self, *queries: Union[str, SearchQuery]) -> Iterator[CVE]:
+        query = Data.make_query(*queries)
+        if isinstance(query, TermQuery):
+            query_text = query.query
+            description_query = "d.description"
+            if not query.case_sensitive:
+                query_text = query_text.upper()
+                description_query = f"UPPER({description_query})"
+        else:
+            return super().search(query)
+        feeds_where_clause = f"c.feed IN ({', '.join('?' * len(self.feeds)) })"
+        params = [feed.feed_id for feed in self.feeds]
+        c = self.connection.cursor()
+        params.append(f"%{query_text}%")
+        c.execute("SELECT c.* FROM descriptions d INNER JOIN cves c ON d.cve = c.id "
+                  f"WHERE {feeds_where_clause} AND {description_query} LIKE ? ORDER BY c.id",
+                  params
+        )
+        yield from CVEdbDataSource.cve_iter(self.connection, c.fetchall())
 
     def reload(self):
         out_of_date_feeds = [feed for feed in self.feeds if feed.is_out_of_date()]

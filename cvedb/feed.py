@@ -25,16 +25,23 @@ class DataSource(ABC, Hashable, IterableABC[CVE]):
 
 
 class Data(DataSource, Sized, ABC):
-    def search(self, *queries: Union[str, SearchQuery]) -> Iterator[CVE]:
+    @staticmethod
+    def make_query(*queries: Union[str, SearchQuery]) -> SearchQuery:
         sq = []
         for query in queries:
             if isinstance(query, SearchQuery):
                 sq.append(query)
             else:
                 sq.append(TermQuery(str(query)))
-        or_query = OrQuery(*sq)
+        if len(sq) == 1:
+            return sq[0]
+        else:
+            return OrQuery(*sq)
+
+    def search(self, *queries: Union[str, SearchQuery]) -> Iterator[CVE]:
+        query = Data.make_query(*queries)
         for cve in self:
-            if or_query.matches(cve):
+            if query.matches(cve):
                 yield cve
 
 

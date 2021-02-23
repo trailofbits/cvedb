@@ -44,8 +44,16 @@ with CVEdb.open() as db:
 By default, the CVEs downloaded from NIST are saved to a sqlite database stored in `cvedb.db.DEFAULT_DB_PATH`, which is
 set to `~/.config/cvedb/cvedb.sqlite`. This can be customized by passing the `db_path` argument to `CVEdb.open`.
 
-The `db` object is an instance of `cvedb.feed.Feed`, which has
-[numerous methods to query CVEs](https://github.com/trailofbits/graphtage/blob/master/graphtage/printer.py).
+The `db.data()` function returns an instance of a `cvedb.feed.Data` object, which has
+[numerous methods to query CVEs](https://github.com/trailofbits/cvedb/blob/master/cvedb/feed.py).
+For example:
+```python
+with CVEdb.open() as db:
+    for cve in db.data().search("search term"):
+        print(cve)
+```
+In addition to accepting strings, the `data().search(...)` function will accept any
+[`cvedb.search.SearchQuery` object](https://github.com/trailofbits/cvedb/blob/master/cvedb/search.py).
 
 ## License and Acknowledgements
 
