@@ -1,9 +1,9 @@
-from datetime import datetime, tzinfo
+from datetime import datetime, timezone
 import itertools
 from pathlib import Path
 from sqlite3 import connect, Connection
 from time import time
-from typing import Any, Iterable, Iterator, List, Optional, Tuple, Union
+from typing import Iterable, Iterator, List, Optional, Tuple, Union
 
 from cvss import CVSS2, CVSS3, CVSSError
 from tqdm import tqdm
@@ -56,7 +56,7 @@ class CVEdbDataSource(DataSource):
             self.feeds = [source]
 
     @staticmethod
-    def cve_iter(connection: Connection, rows: Iterator[Tuple[str, ...]]) -> Iterator[CVE]:
+    def cve_iter(connection: Connection, rows: Iterator[Tuple[Union[float, int, str], ...]]) -> Iterator[CVE]:
         for cve_id, _, published, last_modified, impact_vector, *_ in rows:
             if impact_vector is None:
                 impact = None
@@ -73,8 +73,8 @@ class CVEdbDataSource(DataSource):
             descriptions = tuple(Description(lang, desc) for lang, desc in d.fetchall())
             yield CVE(
                 cve_id=cve_id,
-                published_date=datetime.utcfromtimestamp(published),
-                last_modified_date=datetime.utcfromtimestamp(last_modified),
+                published_date=datetime.fromtimestamp(published, timezone.utc),
+                last_modified_date=datetime.fromtimestamp(last_modified, timezone.utc),
                 impact=impact,
                 descriptions=descriptions,
                 references=(),  # TODO: Implement references
@@ -143,7 +143,7 @@ class DbBackedFeed(Feed):
         row = c.fetchone()
         if row is None or row[0] is None:
             return None
-        return datetime.utcfromtimestamp(row[0])
+        return datetime.fromtimestamp(row[0], timezone.utc)
 
     def last_checked(self) -> Optional[datetime]:
         c = self.connection.cursor()
@@ -151,7 +151,7 @@ class DbBackedFeed(Feed):
         row = c.fetchone()
         if row is None or row[0] is None:
             return None
-        return datetime.utcfromtimestamp(row[0])
+        return datetime.fromtimestamp(row[0], timezone.utc)
 
     def is_out_of_date(self) -> bool:
         last_checked = self.last_checked()
