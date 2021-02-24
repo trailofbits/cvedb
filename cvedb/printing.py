@@ -40,7 +40,7 @@ def print_cve_tty(cve: CVE, stream: TextIO, term_columns: Optional[int] = None):
     if len(cve_id) < CVE_ID_WIDTH:
         cve_id = f"{cve_id}{' ' * (CVE_ID_WIDTH - len(cve_id))}"
     color = SEVERITY_COLORS[cve.severity]
-    stream.write(f"{color}{cve_id}\033[0m\033[3m\033[37;1m{lines[0]}\033[23m\033[0m\n")
+    stream.write(f"{color}{cve_id}\033[0m\033[3m\033[37;1m\033[40m{lines[0]}\033[23m\033[0m\n")
     if len(lines) < 3:
         lines += [""] * (3 - len(lines))
     for i, line in enumerate(lines[1:]):
@@ -52,7 +52,7 @@ def print_cve_tty(cve: CVE, stream: TextIO, term_columns: Optional[int] = None):
             prefix = " " * CVE_ID_WIDTH
         if len(prefix) < CVE_ID_WIDTH:
             prefix += " " * (CVE_ID_WIDTH - len(prefix))
-        stream.write(f"{color}{prefix}\033[0m\033[3m\033[37;1m{line}\033[23m\033[0m\n")
+        stream.write(f"{color}{prefix}\033[0m\033[3m\033[37;1m\033[40m{line}\033[23m\033[0m\n")
 
 
 def print_cve_notty(cve: CVE, stream: TextIO):
