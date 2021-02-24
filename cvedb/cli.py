@@ -1,5 +1,6 @@
 import argparse
-from datetime import datetime, timezone
+from datetime import datetime
+from dateutil.parser import isoparse, ParserError
 import pkg_resources
 import sys
 from typing import List, Optional
@@ -18,19 +19,12 @@ def version() -> str:
 
 def parse_date(date_str: str) -> datetime:
     try:
-        return datetime.fromisoformat(date_str)
-    except ValueError:
+        return isoparse(date_str).astimezone()
+    except ParserError:
         pass
-    # is it just a year?
-    if len(date_str) == 4:
-        try:
-            return datetime(year=int(date_str), month=1, day=1, tzinfo=timezone.utc)
-        except ValueError:
-            pass
     raise argparse.ArgumentTypeError(f"Invalid date {date_str!r}. Dates must be either a four digit year or an ISO "
-                                     "8601 string. See "
-                                     "https://docs.python.org/3.9/library/datetime.html#datetime.datetime.fromisoformat"
-                                     " for examples.")
+                                     "8601 string. See https://dateutil.readthedocs.io/en/stable/parser.html "
+                                     "for examples.")
 
 
 def main(argv: Optional[List[str]] = None) -> int:

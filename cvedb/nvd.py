@@ -118,7 +118,7 @@ class JsonDataSource(DataSource):
         if meta is None:
             if "CVE_data_timestamp" not in json_obj:
                 raise ValueError("If `meta` is None, `json_obj[\"CVE_data_timestamp\"]` must contain a timestamp")
-            meta = Meta(datetime.fromisoformat(json_obj["CVE_data_timestamp"]), 0, 0, 0, b"")
+            meta = Meta(isoparse(json_obj["CVE_data_timestamp"]).astimezone(), 0, 0, 0, b"")
         return JsonDataSource(meta, (
             JsonDataSource.parse_cve(cve_obj) for cve_obj in json_obj.get("CVE_Items", ())
         ))
