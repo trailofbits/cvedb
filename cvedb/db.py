@@ -10,7 +10,10 @@ from tqdm import tqdm
 
 from .cve import CVE, Description
 from .feed import Data, DataSource, Feed, FEEDS, MAX_DATA_AGE_SECONDS
-from .search import AndQuery, CompoundQuery, OrQuery, SearchQuery, Sort, TermQuery
+from .search import (
+    AfterModifiedDateQuery, AfterPublishedDateQuery, BeforeModifiedDateQuery, BeforePublishedDateQuery, CompoundQuery,
+    OrQuery, SearchQuery, Sort, TermQuery
+)
 
 DEFAULT_DB_PATH = Path.home() / ".config" / "cvedb" / "cvedb.sqlite"
 
@@ -239,7 +242,7 @@ class CVEdbData(Data):
         return c.fetchone()[0]
 
     @staticmethod
-    def _to_sql_clause(query: SearchQuery) -> Tuple[Optional[str], Optional[Tuple[str, ...]]]:
+    def _to_sql_clause(query: SearchQuery) -> Tuple[Optional[str], Optional[Tuple[Union[str, int], ...]]]:
         if isinstance(query, TermQuery):
             query_text = query.query
             description_query = "d.description"
@@ -247,6 +250,14 @@ class CVEdbData(Data):
                 query_text = query_text.upper()
                 description_query = f"UPPER({description_query})"
             return f"{description_query} LIKE ?", (f"%{query_text}%",)
+        elif isinstance(query, BeforePublishedDateQuery):
+            return f"c.published <= ?", (int(query.date.astimezone().timestamp()),)
+        elif isinstance(query, BeforeModifiedDateQuery):
+            return f"c.last_modified <= ?", (int(query.date.astimezone().timestamp()),)
+        elif isinstance(query, AfterPublishedDateQuery):
+            return f"c.published >= ?", (int(query.date.astimezone().timestamp()),)
+        elif isinstance(query, AfterModifiedDateQuery):
+            return f"c.last_modified >= ?", (int(query.date.astimezone().timestamp()),)
         elif isinstance(query, CompoundQuery):
             if len(query.sub_queries) == 0:
                 return ["true", "false"][isinstance(query, OrQuery)], ()
@@ -276,7 +287,7 @@ class CVEdbData(Data):
         query_string, query_params = CVEdbData._to_sql_clause(query)
         if query_string is None or query_params is None:
             # the query could not be converted to a SQL query
-            return super().search(query)
+            yield from super().search(query, sort=sort, ascending=ascending)
         feeds_where_clause = f"c.feed IN ({', '.join('?' * len(self.feeds)) })"
         params = [feed.feed_id for feed in self.feeds]
         c = self.connection.cursor()
@@ -304,8 +315,7 @@ class CVEdbData(Data):
             order_by = f"ORDER BY {', '.join(components)}"
         c.execute("SELECT DISTINCT c.* FROM descriptions d INNER JOIN cves c ON d.cve = c.id "
                   f"WHERE {feeds_where_clause} AND {query_string} {order_by}",
-                  params
-        )
+                  params)
         yield from CVEdbDataSource.cve_iter(self.connection, c.fetchall())
 
     def reload(self):

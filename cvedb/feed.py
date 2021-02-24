@@ -60,7 +60,7 @@ class Data(DataSource, Sized, ABC):
             ascending: bool = True
     ) -> Iterator[CVE]:
         query = Data.make_query(*queries)
-        for cve in sorted(self, key=Data.sort_key(sort), reverse=not ascending):
+        for cve in sorted(self, key=Data.sort_key(*sort), reverse=not ascending):
             if query.matches(cve):
                 yield cve
 

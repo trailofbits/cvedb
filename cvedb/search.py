@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from datetime import datetime
 from enum import Enum
 from typing import Any, Tuple
 
@@ -23,6 +24,63 @@ class SearchQuery(ABC):
     @abstractmethod
     def matches(self, cve: CVE) -> bool:
         return False
+
+
+class AbstractDateQuery(SearchQuery, ABC):
+    def __init__(self, date: datetime):
+        self.date: datetime = date
+
+    @abstractmethod
+    def get_field(self, cve: CVE) -> datetime:
+        raise NotImplementedError()
+
+
+class BeforeQuery(AbstractDateQuery, ABC):
+    def __init__(self, date_before: datetime):
+        super().__init__(date_before)
+
+    def matches(self, cve: CVE) -> bool:
+        return self.get_field(cve).date() <= self.date
+
+
+class AfterQuery(AbstractDateQuery, ABC):
+    def __init__(self, date_after: datetime):
+        super().__init__(date_after)
+
+    def matches(self, cve: CVE) -> bool:
+        return self.get_field(cve).date() >= self.date
+
+
+class AfterPublishedDateQuery(AfterQuery):
+    def __init__(self, date_after: datetime):
+        super().__init__(date_after)
+
+    def get_field(self, cve: CVE) -> datetime:
+        return cve.published_date
+
+
+class BeforePublishedDateQuery(BeforeQuery):
+    def __init__(self, date_before: datetime):
+        super().__init__(date_before)
+
+    def get_field(self, cve: CVE) -> datetime:
+        return cve.published_date
+
+
+class AfterModifiedDateQuery(AfterQuery):
+    def __init__(self, date_after: datetime):
+        super().__init__(date_after)
+
+    def get_field(self, cve: CVE) -> datetime:
+        return cve.last_modified_date
+
+
+class BeforeModifiedDateQuery(BeforeQuery):
+    def __init__(self, date_before: datetime):
+        super().__init__(date_before)
+
+    def get_field(self, cve: CVE) -> datetime:
+        return cve.last_modified_date
 
 
 class TermQuery(SearchQuery):
@@ -63,11 +121,11 @@ class TermQuery(SearchQuery):
         return hash(self._normalized_query)
 
     def __eq__(self, other):
-        return isinstance(other, SearchQuery) and other._normalized_query == self._normalized_query and \
+        return isinstance(other, TermQuery) and other._normalized_query == self._normalized_query and \
                self.case_sensitive == other.case_sensitive
 
     def __lt__(self, other):
-        return isinstance(other, SearchQuery) and self._normalized_query < other._normalized_query
+        return isinstance(other, TermQuery) and self._normalized_query < other._normalized_query
 
     def __str__(self):
         return self._query

@@ -1,15 +1,36 @@
 import argparse
+from datetime import datetime, timezone
 import pkg_resources
 import sys
 from typing import List, Optional
 
 from .db import CVEdb, DEFAULT_DB_PATH
+from .feed import Data
 from .printing import print_cves
-from .search import Sort
+from .search import (
+    AfterModifiedDateQuery, AfterPublishedDateQuery, AndQuery, BeforeModifiedDateQuery, BeforePublishedDateQuery, Sort
+)
 
 
 def version() -> str:
     return pkg_resources.require("it-depends")[0].version
+
+
+def parse_date(date_str: str) -> datetime:
+    try:
+        return datetime.fromisoformat(date_str)
+    except ValueError:
+        pass
+    # is it just a year?
+    if len(date_str) == 4:
+        try:
+            return datetime(year=int(date_str), month=1, day=1, tzinfo=timezone.utc)
+        except ValueError:
+            pass
+    raise argparse.ArgumentTypeError(f"Invalid date {date_str!r}. Dates must be either a four digit year or an ISO "
+                                     "8601 string. See "
+                                     "https://docs.python.org/3.9/library/datetime.html#datetime.datetime.fromisoformat"
+                                     " for examples.")
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -25,8 +46,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="how to sort the results (default is by CVE ID only)")
     parser.add_argument("--descending", "-d", action="store_true",
                         help="reverse the ordering of results (default is ascending)")
-    parser.add_argument("--ansi", "-a", action="store_true", help="force ANSI colored output even when not printing to "
-                                                                  "a TTY (e.g., when piping output to a file or pager)")
+    parser.add_argument("--after", "-a", type=parse_date, help="only list CVEs published after the given date")
+    parser.add_argument("--before", "-b", type=parse_date, help="only list CVEs published before the given date")
+    parser.add_argument("--modified-after", "-ma", type=parse_date, help="only list CVEs modified after the given date")
+    parser.add_argument("--modified-before", "-mb", type=parse_date,
+                        help="only list CVEs modified before the given date")
+    parser.add_argument("--ansi", action="store_true", help="force ANSI colored output even when not printing to a TTY "
+                                                            "(e.g., when piping output to a file or pager)")
     parser.add_argument("--version", "-v", action="store_true", help="print the version and exit")
 
     args = parser.parse_args(argv[1:])
@@ -38,9 +64,27 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(version())
         return 0
 
+    query = []
+    if args.after:
+        query.append(AfterPublishedDateQuery(args.after))
+    if args.before:
+        query.append(BeforePublishedDateQuery(args.before))
+    if args.modified_before:
+        query.append(BeforeModifiedDateQuery(args.modified_before))
+    if args.modified_after:
+        query.append(AfterModifiedDateQuery(args.modified_after))
+    if args.SEARCH_TERM:
+        query.append(Data.make_query(*args.SEARCH_TERM))
+    if len(query) == 1:
+        query = query[0]
+    elif query:
+        query = AndQuery(*query)
+    else:
+        query = None
+
     try:
         with CVEdb.open(args.database) as db:
-            if not args.SEARCH_TERM:
+            if query is None:
                 # just print all of the CVEs
                 print_cves(db.data())
             else:
@@ -61,7 +105,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 else:
                     force_ansi = None
                 print_cves(
-                    db.data().search(*args.SEARCH_TERM, sort=sorts, ascending=not args.descending),
+                    db.data().search(query, sort=sorts, ascending=not args.descending),
                     force_color=force_ansi
                 )
     except (KeyboardInterrupt, BrokenPipeError):
