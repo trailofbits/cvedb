@@ -246,10 +246,12 @@ class CVEdbData(Data):
         if isinstance(query, TermQuery):
             query_text = query.query
             description_query = "d.description"
+            id_query = "c.id"
             if not query.case_sensitive:
                 query_text = query_text.upper()
                 description_query = f"UPPER({description_query})"
-            return f"{description_query} LIKE ?", (f"%{query_text}%",)
+                id_query = f"UPPER({id_query})"
+            return f"({description_query} LIKE ? OR {id_query} LIKE ?)", (f"%{query_text}%", f"%{query_text}%")
         elif isinstance(query, BeforePublishedDateQuery):
             return f"c.published <= ?", (int(query.date.astimezone().timestamp()),)
         elif isinstance(query, BeforeModifiedDateQuery):
