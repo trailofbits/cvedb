@@ -5,11 +5,11 @@ from sqlite3 import connect, Connection
 from time import time
 from typing import Iterable, Iterator, List, Optional, Tuple, Union
 
-from cvss import CVSS2, CVSS3, CVSSError
 from tqdm import tqdm
 
-from .cve import CVE, Description
+from .cve import CVE
 from .feed import Data, DataSource, Feed, FEEDS, MAX_DATA_AGE_SECONDS
+from .schemas import Schema
 from .search import (
     AfterModifiedDateQuery, AfterPublishedDateQuery, BeforeModifiedDateQuery, BeforePublishedDateQuery, CompoundQuery,
     OrQuery, SearchQuery, Sort, TermQuery
@@ -18,35 +18,6 @@ from .search import (
 DEFAULT_DB_PATH = Path.home() / ".config" / "cvedb" / "cvedb.sqlite"
 
 UPDATE_INTERVAL_SECONDS: int = MAX_DATA_AGE_SECONDS
-
-FEED_TABLE_CREATE = (
-    "CREATE TABLE IF NOT EXISTS feeds("
-    "name VARCHAR UNIQUE NOT NULL, "
-    "last_modified INTEGER NULL, "
-    "last_checked INTEGER NULL "
-    ")"
-)
-
-CVE_TABLE_CREATE = (
-    "CREATE TABLE IF NOT EXISTS cves("
-    "id VARCHAR DESC NOT NULL, "
-    "feed REFERENCES feeds (rowid) NOT NULL, "
-    "published INTEGER NOT NULL, "
-    "last_modified INTEGER NOT NULL, "
-    "impact_vector VARCHAR NULL, "
-    "base_score REAL NULL, "
-    "severity INTEGER NOT NULL, "
-    "PRIMARY KEY (id, feed)"
-    ")"
-)
-
-DESCRIPTIONS_TABLE_CREATE = (
-    "CREATE TABLE IF NOT EXISTS descriptions("
-    "cve REFERENCES cves (id) NOT NULL, "
-    "lang VARCHAR NOT NULL DEFAULT \"en\", "
-    "description VARCHAR NOT NULL"
-    ")"
-)
 
 
 class CVEdbDataSource(DataSource):
@@ -58,38 +29,13 @@ class CVEdbDataSource(DataSource):
         else:
             self.feeds = [source]
 
-    @staticmethod
-    def cve_iter(connection: Connection, rows: Iterator[Tuple[Union[float, int, str], ...]]) -> Iterator[CVE]:
-        for cve_id, _, published, last_modified, impact_vector, *_ in rows:
-            if impact_vector is None:
-                impact = None
-            else:
-                try:
-                    impact = CVSS3(impact_vector)
-                except CVSSError:
-                    try:
-                        impact = CVSS2(impact_vector)
-                    except CVSSError:
-                        impact = None
-            d = connection.cursor()
-            d.execute(f"SELECT lang, description FROM descriptions WHERE cve = ?", (cve_id,))
-            descriptions = tuple(Description(lang, desc) for lang, desc in d.fetchall())
-            yield CVE(
-                cve_id=cve_id,
-                published_date=datetime.fromtimestamp(published, timezone.utc),
-                last_modified_date=datetime.fromtimestamp(last_modified, timezone.utc),
-                impact=impact,
-                descriptions=descriptions,
-                references=(),  # TODO: Implement references
-                assigner=None  # TODO: Implement assigner
-            )
-
     def __iter__(self) -> Iterator[CVE]:
         c = self.connection.cursor()
         where_clause = " OR ".join(["feed = ?"] * len(self.feeds))
         params = tuple(feed.feed_id for feed in self.feeds)
         c.execute(f"SELECT * FROM cves WHERE {where_clause}", params)
-        yield from CVEdbDataSource.cve_iter(self.connection, c.fetchall())
+        # The following assumes that all feeds have the same schema, which should always be true
+        yield from self.feeds[0].schema.cve_iter(c.fetchall())
 
 
 class DbBackedFeed(Feed):
@@ -100,45 +46,8 @@ class DbBackedFeed(Feed):
         self.parent: Feed = parent
         self.connection: Connection = connection
         with self.connection:
-            c = self.connection.cursor()
-            c.execute("PRAGMA user_version")
-            self.schema_version: int = c.fetchone()[0]
-            if self.schema_version > 0:
-                raise ValueError(f"Database is using schema version {self.schema_version}, but expected at most 0")
-            self.connection.execute(FEED_TABLE_CREATE)
-            self.connection.execute(CVE_TABLE_CREATE)
-            self.connection.execute(DESCRIPTIONS_TABLE_CREATE)
-            c.execute(f"INSERT OR IGNORE INTO feeds (name) VALUES (?)", (parent.name,))
-            if c.lastrowid is not None and c.lastrowid > 0:
-                self.feed_id: int = c.lastrowid
-            else:
-                c.execute("SELECT rowid FROM feeds WHERE name = ?", (self.parent.name,))
-                self.feed_id = c.fetchone()[0]
-
-    def add(self, cve: CVE):
-        if cve.impact is None:
-            impact_vector = None
-            base_score = None
-        else:
-            impact_vector = cve.impact.vector
-            base_score = float(cve.impact.base_score)
-        with self.connection as c:
-            c.execute(
-                "INSERT OR REPLACE INTO cves "
-                "(id, feed, published, last_modified, impact_vector, base_score, severity) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)", (
-                    cve.cve_id, self.feed_id, cve.published_date.astimezone().timestamp(),
-                    cve.last_modified_date.astimezone().timestamp(), impact_vector, base_score, int(cve.severity)
-                )
-            )
-            for description in cve.descriptions:
-                c.execute(
-                    "INSERT OR REPLACE INTO descriptions "
-                    "(cve, lang, description) "
-                    "VALUES (?, ?, ?)", (
-                        cve.cve_id, description.lang, description.value
-                    )
-                )
+            self.schema: Schema = Schema.open(self.connection)
+            self.feed_id: int = self.schema.feed_id(self.parent.name)
 
     def last_modified(self) -> Optional[datetime]:
         c = self.connection.cursor()
@@ -180,7 +89,7 @@ class DbBackedFeed(Feed):
                         (new_data.last_modified_date.astimezone().timestamp(), self.feed_id)
                     )
                     for cve in new_data:
-                        self.add(cve)
+                        self.schema.add(cve)
                         t.update(1)
                     c.commit()
         return CVEdbDataSource(self)
@@ -196,7 +105,7 @@ class CVEdbContext:
         if not isinstance(db_path, Path):
             db_path = Path(str(db_path))
         self.db_path: Path = db_path
-        self.parents: Optional[Iterable[Feed]] = None
+        self.parents: Optional[Iterable[Feed]] = parents
         self._connection: Optional[Connection] = None
         self._db: Optional[CVEdb] = None
         self._entries: int = 0
@@ -318,7 +227,8 @@ class CVEdbData(Data):
         c.execute("SELECT DISTINCT c.* FROM descriptions d INNER JOIN cves c ON d.cve = c.id "
                   f"WHERE {feeds_where_clause} AND {query_string} {order_by}",
                   params)
-        yield from CVEdbDataSource.cve_iter(self.connection, c.fetchall())
+        # The following assumes that all feeds have the same schema, which should always be true
+        yield from self.feeds[0].schema.cve_iter(c.fetchall())
 
     def reload(self):
         out_of_date_feeds = [feed for feed in self.feeds if feed.is_out_of_date()]
