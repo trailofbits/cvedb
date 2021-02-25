@@ -125,8 +125,14 @@ def print_cve_tty(cve: CVE, stream: TextIO, term_columns: Optional[int] = None):
     stream.write("╗\n")
     _print_box_row(stream, columns, f" Published: \033[7m{cve.published_date.strftime('%Y-%m-%d')}\033[0m",
                    right_text=f" Modified: \033[7m{cve.last_modified_date.strftime('%Y-%m-%d')}\033[0m ")
+    if cve.impact is None:
+        impact_text = "????"
+    else:
+        impact_text = f"{cve.impact.base_score:02.1f}"
+        if len(impact_text) < 4:
+            impact_text += " " * (4 - len(impact_text))
     _print_box_row(stream, columns, f"  Severity: {color}\033[7m{cve.severity.name}\033[0m",
-                   right_text=f" Impact: {color}\033[7m{cve.impact.base_score:.1f}\033[0m        ")
+                   right_text=f" Impact: {color}\033[7m{impact_text}\033[0m       ")
     _print_box_row(stream, actual_columns, "─" * (actual_columns - 2), left_edge="╟", right_edge="╢")
     _print_box_row(stream, columns, cve.description(), word_wrap=True, line_pre="\033[3m\033[1m", line_post="\033[0m")
     if cve.references:
