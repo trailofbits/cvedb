@@ -3,7 +3,7 @@ from datetime import datetime
 from gzip import decompress
 import json
 import sys
-from typing import Any, Dict, Iterable, Optional, TextIO, Union, Iterator
+from typing import Any, Dict, Iterable, Iterator, List, Optional, TextIO, Union
 import urllib.request
 
 from cvss import CVSS2, CVSS3
@@ -69,10 +69,16 @@ class JsonDataSource(DataSource):
     def __init__(self, meta: Meta, cves: Iterable[CVE]):
         super().__init__(meta.last_modified_date)
         self.meta: Meta = meta
-        self.cves: Iterable[CVE] = cves
+        if isinstance(cves, list):
+            self.cves: List[CVE] = cves
+        else:
+            self.cves = list(cves)
 
     def __iter__(self) -> Iterator[CVE]:
         return iter(self.cves)
+
+    def __len__(self):
+        return len(self.cves)
 
     @staticmethod
     def parse_cve(cve_obj: Dict[str, Any]) -> CVE:
