@@ -25,6 +25,7 @@ def print_cve_tty(cve: CVE, stream: TextIO, term_columns: Optional[int] = None):
         columns = get_terminal_size((80, 20)).columns
     else:
         columns = term_columns
+    columns = max(CVE_ID_WIDTH + 20, columns)
     desc_words = cve.description().split(" ")
     lines = [""]
     for word in desc_words:
