@@ -147,7 +147,7 @@ class Schema(ABC):
         raise NotImplementedError()
 
     @abstractmethod
-    def add(self, cve: CVE):
+    def add(self, cve: CVE, source_feed: int):
         raise NotImplementedError()
 
     @abstractmethod
@@ -177,7 +177,7 @@ class SchemaV0(Schema):
     def migrate_from_previous(cls, previous_schema: Schema) -> "SchemaV0":
         raise ValueError("Schema version 0 has no previous version from which to migrate.")
 
-    def add(self, cve: CVE):
+    def add(self, cve: CVE, source_feed: int):
         if cve.impact is None:
             impact_vector = None
             base_score = None
@@ -189,7 +189,7 @@ class SchemaV0(Schema):
                 "INSERT OR REPLACE INTO cves "
                 "(id, feed, published, last_modified, impact_vector, base_score, severity) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)", (
-                    cve.cve_id, self.feed_id, cve.published_date.astimezone().timestamp(),
+                    cve.cve_id, source_feed, cve.published_date.astimezone().timestamp(),
                     cve.last_modified_date.astimezone().timestamp(), impact_vector, base_score, int(cve.severity)
                 )
             )
@@ -264,8 +264,8 @@ class SchemaV1(SchemaV0):
         previous_schema.connection.execute("DROP TABLE IF EXISTS descriptions")
         return SchemaV1.create(previous_schema.connection)
 
-    def add(self, cve: CVE):
-        super().add(cve)
+    def add(self, cve: CVE, source_feed: int):
+        super().add(cve, source_feed)
         for ref in cve.references:
             self.connection.execute(
                 "INSERT OR REPLACE INTO refs "

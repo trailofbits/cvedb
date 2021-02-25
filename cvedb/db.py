@@ -3,7 +3,7 @@ import itertools
 from pathlib import Path
 from sqlite3 import connect, Connection
 from time import time
-from typing import Iterable, Iterator, List, Optional, Tuple, Union
+from typing import Iterable, Iterator, List, Optional, Sized, Tuple, Union
 
 from tqdm import tqdm
 
@@ -78,6 +78,8 @@ class DbBackedFeed(Feed):
             return existing_data
         with tqdm(desc=self.name, unit=" CVEs", leave=False) as t:
             new_data = self.parent.reload(existing_data)
+            if isinstance(new_data, Sized):
+                t.total = len(new_data)
             with self.connection as c:
                 c.execute(
                     "UPDATE feeds SET last_checked = ? WHERE rowid = ?",
@@ -89,7 +91,7 @@ class DbBackedFeed(Feed):
                         (new_data.last_modified_date.astimezone().timestamp(), self.feed_id)
                     )
                     for cve in new_data:
-                        self.schema.add(cve)
+                        self.schema.add(cve, self.feed_id)
                         t.update(1)
                     c.commit()
         return CVEdbDataSource(self)

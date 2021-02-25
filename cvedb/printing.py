@@ -37,6 +37,11 @@ def print_cve_tty(cve: CVE, stream: TextIO, term_columns: Optional[int] = None):
         else:
             new_line = word
         lines[-1] = new_line
+    if cve.references:
+        lines.append("")
+        lines.append("References:")
+        for ref in cve.references:
+            lines.append(f" • \033]8;;{ref.url}\033\\{ref.name}\033]8;;\033\\")
     cve_id = cve.cve_id
     if len(cve_id) < CVE_ID_WIDTH:
         cve_id = f"{cve_id}{' ' * (CVE_ID_WIDTH - len(cve_id))}"
