@@ -1,6 +1,7 @@
 from unittest import TestCase
 
-from cvedb.cpe import Logical, parse_formatted_string, Part
+from cvedb.db import CVEdb
+from cvedb.cpe import Logical, parse_formatted_string, Part, Testable
 
 
 class TestCPE(TestCase):
@@ -17,3 +18,10 @@ class TestCPE(TestCase):
         self.assertEqual(cpe.target_sw, "rust")
         self.assertEqual(cpe.target_hw, Logical.ANY)
         self.assertEqual(cpe.other, Logical.ANY)
+
+    def test_serialization(self):
+        with CVEdb.open() as db:
+            for i, cve in enumerate(db.data()):
+                if i > 1000:
+                    break
+                self.assertEqual(cve.configurations, Testable.loads(cve.configurations.dumps()))

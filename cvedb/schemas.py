@@ -2,11 +2,11 @@ from abc import abstractmethod, ABC
 from datetime import datetime, timezone
 from sqlite3 import Connection
 import sys
-from typing import Dict, Iterator, Optional, Tuple, Type, TypeVar, Union
+from typing import Any, Callable, Dict, Iterator, Optional, Tuple, Type, TypeVar, Union
 
 from cvss import CVSS2, CVSS3, CVSSError
 
-from .cve import CVE, Description, Reference
+from .cve import Configurations, CVE, Description, Reference
 
 
 SCHEMAS: Dict[int, Type["Schema"]] = {}
@@ -22,7 +22,7 @@ FEED_TABLE_CREATE = (
     ")"
 )
 
-CVE_TABLE_CREATE = (
+CVE_TABLE_CREATE_V0 = (
     "CREATE TABLE IF NOT EXISTS cves("
     "id VARCHAR DESC NOT NULL, "
     "feed REFERENCES feeds (rowid) NOT NULL, "
@@ -31,6 +31,20 @@ CVE_TABLE_CREATE = (
     "impact_vector VARCHAR NULL, "
     "base_score REAL NULL, "
     "severity INTEGER NOT NULL, "
+    "PRIMARY KEY (id, feed)"
+    ")"
+)
+
+CVE_TABLE_CREATE_V1 = (
+    "CREATE TABLE IF NOT EXISTS cves("
+    "id VARCHAR DESC NOT NULL, "
+    "feed REFERENCES feeds (rowid) NOT NULL, "
+    "published INTEGER NOT NULL, "
+    "last_modified INTEGER NOT NULL, "
+    "impact_vector VARCHAR NULL, "
+    "base_score REAL NULL, "
+    "severity INTEGER NOT NULL, "
+    "configurations VARCHAR NULL, "
     "PRIMARY KEY (id, feed)"
     ")"
 )
@@ -48,6 +62,23 @@ REFERENCES_TABLE_CREATE = (
     "cve REFERENCES cves (id) NOT NULL, "
     "name VARCHAR NULL, "
     "url VARCHAR NULL"
+    ")"
+)
+
+
+CPES_TABLE_CREATE = (
+    "CREATE TABLE IF NOT EXISTS cpes("
+    "uri VARCHAR NOT NULL, "
+    "part VARCHAR NOT NULL, "
+    "vendor VARCHAR NULL, "
+    "product VARCHAR NULL, "
+    "version VARCHAR NULL, "
+    "update_str VARCHAR NULL, "
+    "edition VARCHAR NULL, "
+    "language VARCHAR NULL, "
+    "sw_edition VARCHAR NULL, "
+    "target_sw VARCHAR NULL, "
+    "other VARCHAR NULL"
     ")"
 )
 
@@ -158,11 +189,12 @@ class Schema(ABC):
 @register_schema(0)
 class SchemaV0(Schema):
     @classmethod
-    def create(cls: Type[S], connection: Connection) -> S:
+    def create(cls: Type[S], connection: Connection, cve_table_create=CVE_TABLE_CREATE_V0) -> S:
         connection.execute(FEED_TABLE_CREATE)
-        connection.execute(CVE_TABLE_CREATE)
+        connection.execute(cve_table_create)
         connection.execute(DESCRIPTIONS_TABLE_CREATE)
         connection.execute("PRAGMA user_version = 0")
+        return cls(connection)
 
     def feed_id(self, name: str) -> int:
         c = self.connection.cursor()
@@ -177,7 +209,7 @@ class SchemaV0(Schema):
     def migrate_from_previous(cls, previous_schema: Schema) -> "SchemaV0":
         raise ValueError("Schema version 0 has no previous version from which to migrate.")
 
-    def add(self, cve: CVE, source_feed: int):
+    def add(self, cve: CVE, source_feed: int, **extra_cols):
         if cve.impact is None:
             impact_vector = None
             base_score = None
@@ -185,13 +217,19 @@ class SchemaV0(Schema):
             impact_vector = cve.impact.vector
             base_score = float(cve.impact.base_score)
         with self.connection as c:
+            col_names = []
+            col_values = []
+            for name, value in extra_cols.items():
+                col_names.append(name)
+                col_values.append(value)
+            extra_col_names = "".join(f", {col}" for col in col_names)
             c.execute(
                 "INSERT OR REPLACE INTO cves "
-                "(id, feed, published, last_modified, impact_vector, base_score, severity) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)", (
+                f"(id, feed, published, last_modified, impact_vector, base_score, severity{extra_col_names}) "
+                f"VALUES (?, ?, ?, ?, ?, ?, ?{', ?' * len(extra_cols)})", [
                     cve.cve_id, source_feed, cve.published_date.astimezone().timestamp(),
                     cve.last_modified_date.astimezone().timestamp(), impact_vector, base_score, int(cve.severity)
-                )
+                ] + col_values
             )
             for description in cve.descriptions:
                 c.execute(
@@ -202,8 +240,12 @@ class SchemaV0(Schema):
                     )
                 )
 
-    def cve_iter(self, rows: Iterator[Tuple[Union[float, int, str], ...]]) -> Iterator[CVE]:
-        for cve_id, _, published, last_modified, impact_vector, *_ in rows:
+    def cve_iter(
+            self,
+            rows: Iterator[Tuple[Union[float, int, str], ...]],
+            extra_row_handler: Callable[[Tuple[Union[float, int, str], ...], Dict[str, Any]], Any] = lambda *_:None
+    ) -> Iterator[CVE]:
+        for cve_id, _, published, last_modified, impact_vector, *extra_rows in rows:
             if impact_vector is None:
                 impact = None
             else:
@@ -217,6 +259,9 @@ class SchemaV0(Schema):
             d = self.connection.cursor()
             d.execute(f"SELECT lang, description FROM descriptions WHERE cve = ?", (cve_id,))
             descriptions = tuple(Description(lang, desc) for lang, desc in d.fetchall())
+            kwargs = {}
+            if extra_rows:
+                extra_row_handler(extra_rows, kwargs)
             yield CVE(
                 cve_id=cve_id,
                 published_date=datetime.fromtimestamp(published, timezone.utc),
@@ -224,7 +269,8 @@ class SchemaV0(Schema):
                 impact=impact,
                 descriptions=descriptions,
                 references=(),  # References are implemented in SchemaV1
-                assigner=None
+                assigner=None,
+                **kwargs
             )
 
 
@@ -232,8 +278,9 @@ class SchemaV0(Schema):
 class SchemaV1(SchemaV0):
     @classmethod
     def create(cls, connection: Connection) -> "SchemaV1":
-        super().create(connection)
+        super().create(connection, cve_table_create=CVE_TABLE_CREATE_V1)
         connection.execute(REFERENCES_TABLE_CREATE)
+        connection.execute(CPES_TABLE_CREATE)
         connection.execute("PRAGMA user_version = 1")
         return cls(connection)
 
@@ -264,8 +311,10 @@ class SchemaV1(SchemaV0):
         previous_schema.connection.execute("DROP TABLE IF EXISTS descriptions")
         return SchemaV1.create(previous_schema.connection)
 
-    def add(self, cve: CVE, source_feed: int):
-        super().add(cve, source_feed)
+    def add(self, cve: CVE, source_feed: int, **extra_cols):
+        if "configurations" not in extra_cols:
+            extra_cols["configurations"] = cve.configurations.dumps()
+        super().add(cve, source_feed, **extra_cols)
         for ref in cve.references:
             self.connection.execute(
                 "INSERT OR REPLACE INTO refs "
@@ -275,8 +324,18 @@ class SchemaV1(SchemaV0):
                 )
             )
 
-    def cve_iter(self, rows: Iterator[Tuple[Union[float, int, str], ...]]) -> Iterator[CVE]:
-        for cve in super().cve_iter(rows):
+    def cve_iter(
+            self,
+            rows: Iterator[Tuple[Union[float, int, str], ...]],
+            extra_row_handler: Callable[[Tuple[Union[float, int, str], ...], Dict[str, Any]], Any] = lambda *_: None
+    ) -> Iterator[CVE]:
+        def handle_configurations(extra_rows: Tuple[Union[float, int, str], ...], kwargs: Dict[str, Any]):
+            _, _, configurations, *extra_rows = extra_rows
+            kwargs["configurations"] = Configurations.loads(configurations)
+            if extra_rows:
+                extra_row_handler(extra_rows, kwargs)
+
+        for cve in super().cve_iter(rows, extra_row_handler=handle_configurations):
             d = self.connection.cursor()
             d.execute(f"SELECT url, name FROM refs WHERE cve = ?", (cve.cve_id,))
             references = tuple(Reference(url, name) for url, name in d.fetchall())
@@ -288,7 +347,8 @@ class SchemaV1(SchemaV0):
                     impact=cve.impact,
                     descriptions=cve.descriptions,
                     references=references,
-                    assigner=cve.assigner
+                    assigner=cve.assigner,
+                    configurations=cve.configurations
                 )
             else:
                 yield cve

@@ -1,11 +1,21 @@
+from abc import abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import IntEnum
-from typing import Optional, Tuple, Union
+from typing import Iterable, Optional, overload, TextIO, Tuple, Union
+import sys
 
 from cvss import CVSS2, CVSS3
 
 from .cpe import Testable
+
+
+if sys.version_info < (3, 9):
+    # collections.abc.Sequence didn't become subscriptable until Python 3.9
+    TestableSequence = Sequence
+else:
+    TestableSequence = Sequence[Testable]
 
 
 class Severity(IntEnum):
@@ -29,6 +39,50 @@ class Description:
     value: str
 
 
+class Configurations(TestableSequence, Testable):
+    uid = "C"
+
+    def __init__(self, testable: Iterable[Testable]):
+        self.testable: Tuple[Testable, ...] = tuple(testable)
+
+    @overload
+    @abstractmethod
+    def __getitem__(self, i: int) -> Testable: ...
+
+    @overload
+    @abstractmethod
+    def __getitem__(self, s: slice) -> Sequence[Testable]: ...
+
+    def __getitem__(self, i: int) -> Testable:
+        return self.testable[i]
+
+    def __len__(self) -> int:
+        return len(self.testable)
+
+    def __eq__(self, other):
+        return isinstance(other, Configurations) and self.testable == other.testable
+
+    def __hash__(self):
+        return hash(self.testable)
+
+    def dump_content(self, stream: TextIO):
+        stream.write(str(len(self)))
+        stream.write("\n")
+        for child in self:
+            child.dump(stream)
+
+    @classmethod
+    def load_content(cls, stream: TextIO) -> "Configurations":
+        num_children = int(stream.readline())
+        return Configurations(Testable.load(stream) for _ in range(num_children))
+
+    def match(self, cpe: "CPE") -> bool:
+        return any(child.match(cpe) for child in self)
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}({self.testable!r})"
+
+
 @dataclass(unsafe_hash=True, order=True, frozen=True)
 class CVE:
     cve_id: str
@@ -38,7 +92,7 @@ class CVE:
     descriptions: Tuple[Description, ...] = ()
     references: Tuple[Reference, ...] = ()
     assigner: Optional[str] = None
-    configurations: Tuple[Testable, ...] = ()
+    configurations: Configurations = Configurations(())
 
     def description(self, lang: str = "en") -> Optional[str]:
         for d in self.descriptions:

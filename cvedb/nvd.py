@@ -12,7 +12,7 @@ from dateutil.parser import isoparse
 from tqdm import tqdm
 
 from .cpe import And, Negate, Or, parse_formatted_string, Testable, VersionRange
-from .cve import CVE, Description, Reference
+from .cve import Configurations, CVE, Description, Reference
 from .feed import Data, DataSource, Feed
 
 BASE_JSON_URL: str = "https://nvd.nist.gov/feeds/json/cve/1.1/nvdcve-1.1-"
@@ -117,11 +117,10 @@ class JsonDataSource(DataSource):
             raise ValueError(f"Unknown configuration node type: {node!r}")
 
     @staticmethod
-    def parse_configurations(config_dict: Dict[str, Any]) -> Iterator[Testable]:
+    def parse_configurations(config_dict: Dict[str, Any]) -> Configurations:
         if config_dict.get("CVE_data_version", "4.0") != "4.0":
             raise ValueError(f"Unsupported configuration CVE_data_version: {config_dict['CVE_data_version']}")
-        for node in config_dict["nodes"]:
-            yield JsonDataSource._parse_config_node(node)
+        return Configurations(JsonDataSource._parse_config_node(node) for node in config_dict["nodes"])
 
     @staticmethod
     def parse_cve(cve_obj: Dict[str, Any]) -> CVE:
@@ -157,7 +156,7 @@ class JsonDataSource(DataSource):
             descriptions=descriptions,
             references=references,
             assigner=assigner,
-            configurations=tuple(JsonDataSource.parse_configurations(cve_obj.get("configurations", {})))
+            configurations=JsonDataSource.parse_configurations(cve_obj.get("configurations", {}))
         )
 
     @staticmethod

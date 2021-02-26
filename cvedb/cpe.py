@@ -1,14 +1,9 @@
-from abc import ABC
+from abc import ABC, ABCMeta, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
+from io import StringIO
 import re
-from typing import Callable, Iterable, Iterator, Optional, Tuple, Union
-import sys
-
-if sys.version_info < (3, 8):
-    from typing_extensions import Protocol, runtime_checkable
-else:
-    from typing import Protocol, runtime_checkable
+from typing import Callable, Dict, Iterable, Iterator, Optional, TextIO, Tuple, Type, TypeVar, Union
 
 
 AV_STRING_REGEX = re.compile(
@@ -18,10 +13,61 @@ AV_STRING_REGEX = re.compile(
 LANGTAG_REGEX = re.compile(r"^(([A-Za-z]{2,3})(-([A-Za-z]{2}|[0-9]{3}))?).*")
 
 
-@runtime_checkable
-class Testable(Protocol):
+TESTABLES_BY_UID: Dict[str, Type["Testable"]] = {}
+
+
+class TestableMeta(ABCMeta):
+    def __init__(cls, name, bases, clsdict):
+        if name == "CPE":
+            clsdict["uid"] = "c"
+        super().__init__(name, bases, clsdict)
+        if hasattr(cls, "__abstractmethods__") and cls.__abstractmethods__:
+            return
+        elif clsdict.get("uid", None) is None:
+            raise TypeError(f"Testable {name} must define a unique UID for serialization")
+        elif clsdict["uid"] in TESTABLES_BY_UID:
+            raise TypeError(f"{name}'s UID of {clsdict['uid']!r} is already registered by "
+                            f"{TESTABLES_BY_UID[clsdict['uid']].__name__}")
+        elif len(clsdict["uid"]) != 1:
+            raise TypeError(f"{name}.uid must be exactly one character")
+        TESTABLES_BY_UID[clsdict["uid"]] = cls
+
+
+T = TypeVar("T", bound="Testable")
+
+
+class Testable(metaclass=TestableMeta):
+    uid: str
+
+    @abstractmethod
     def match(self, cpe: "CPE") -> bool:
-        ...
+        raise NotImplementedError()
+
+    @abstractmethod
+    def dump_content(self, stream: TextIO):
+        raise NotImplementedError()
+
+    def dump(self, stream: TextIO):
+        stream.write(self.uid)
+        self.dump_content(stream)
+
+    def dumps(self) -> str:
+        ret = StringIO()
+        self.dump(ret)
+        return ret.getvalue()
+
+    @staticmethod
+    def load(stream: TextIO) -> "Testable":
+        return TESTABLES_BY_UID[stream.read(1)].load_content(stream)
+
+    @staticmethod
+    def loads(serialized: str) -> "Testable":
+        return Testable.load(StringIO(serialized))
+
+    @classmethod
+    @abstractmethod
+    def load_content(cls: T, stream: TextIO) -> T:
+        raise NotImplementedError()
 
 
 class Part(Enum):
@@ -29,10 +75,16 @@ class Part(Enum):
     OS = "o"
     APP = "a"
 
+    def __str__(self):
+        return self.value
+
 
 class Logical(Enum):
     ANY = "*"
     NA = "-"
+
+    def __str__(self):
+        return self.value
 
 
 class Language:
@@ -99,6 +151,10 @@ class CPE(Testable):
     target_hw: AVString = Logical.ANY
     other: AVString = Logical.ANY
 
+    @property
+    def uid(self) -> str:
+        return "c"
+
     @staticmethod
     def _match(a, b) -> bool:
         if isinstance(a, Logical):
@@ -113,6 +169,22 @@ class CPE(Testable):
             "part", "vendor", "product", "update", "edition", "lang", "sw_edition", "target_sw",
             "target_hw", "other"
         )) and (not match_version or CPE._match(self.version, cpe.version))
+
+    def formatted_string(self) -> str:
+        return "cpe:2.3:" + ":".join(str(getattr(self, attr)) for attr in (
+            "part", "vendor", "product", "version", "update", "edition", "lang", "sw_edition", "target_sw",
+            "target_hw", "other"
+        ))
+
+    __str__ = formatted_string
+
+    def dump_content(self, stream: TextIO):
+        stream.write(self.formatted_string())
+        stream.write("\n")
+
+    @classmethod
+    def load_content(cls: T, stream: TextIO) -> T:
+        return parse_formatted_string(stream.readline())
 
 
 class FormattedStringError(ValueError):
@@ -282,13 +354,38 @@ class TestError(ValueError):
     pass
 
 
-class LogicalTest(ABC, Testable):
+class LogicalTest(Testable, ABC):
     def __init__(self, children: Iterable[Union["LogicalTest", CPE]], negate: bool = False):
         self.children: Tuple[Union[LogicalTest, CPE], ...] = tuple(children)
         self.negate: bool = negate
 
+    def __eq__(self, other):
+        return isinstance(other, LogicalTest) and other.uid == self.uid and other.negate == self.negate and \
+               other.children == self.children
+
+    def __hash__(self):
+        return hash((self.negate,) + self.children)
+
+    @classmethod
+    def load_content(cls: T, stream: TextIO) -> T:
+        negate = stream.read(1) == "~"
+        num_children = int(stream.readline())
+        children = [Testable.load(stream) for i in range(num_children)]
+        return cls(children, negate)
+
+    def dump_content(self, stream: TextIO):
+        if self.negate:
+            stream.write("~")
+        else:
+            stream.write("=")
+        stream.write(f"{len(self.children)!s}\n")
+        for child in self.children:
+            child.dump(stream)
+
 
 class And(LogicalTest):
+    uid = "a"
+
     def match(self, cpe: CPE) -> bool:
         result = all(cpe.match(child) for child in self.children)
         if self.negate:
@@ -298,6 +395,8 @@ class And(LogicalTest):
 
 
 class Or(LogicalTest):
+    uid = "o"
+
     def match(self, cpe: CPE) -> bool:
         result = any(cpe.match(child) for child in self.children)
         if self.negate:
@@ -307,14 +406,31 @@ class Or(LogicalTest):
 
 
 class Negate(Testable):
+    uid = "!"
+
     def __init__(self, wrapped: Testable):
         self.wrapped: Testable = wrapped
+
+    def __eq__(self, other):
+        return isinstance(other, Negate) and self.wrapped == other.wrapped
+
+    def __hash__(self):
+        return hash(self.wrapped)
 
     def match(self, cpe: "CPE") -> bool:
         return not self.wrapped.match(cpe)
 
+    def dump_content(self, stream: TextIO):
+        self.wrapped.dump(stream)
+
+    @classmethod
+    def load_content(cls: T, stream: TextIO) -> T:
+        return cls(Testable.load(stream))
+
 
 class VersionRange(Testable):
+    uid = "v"
+
     def __init__(
             self,
             wrapped: CPE,
@@ -328,6 +444,14 @@ class VersionRange(Testable):
         self.end: Optional[str] = end
         self.include_start: bool = include_start
         self.include_end: bool = include_end
+
+    def __eq__(self, other):
+        return isinstance(other, VersionRange) and self.start == other.start and self.end == other.end and \
+               self.include_start == other.include_start and self.include_end == other.include_end and \
+               self.wrapped == other.wrapped
+
+    def __hash__(self):
+        return hash((self.wrapped, self.start, self.end, self.include_start, self.include_end))
 
     def match(self, cpe: "CPE") -> bool:
         if isinstance(cpe.version, str):
@@ -344,3 +468,26 @@ class VersionRange(Testable):
                 elif cpe.version >= self.end:
                     return False
         return self.wrapped.match(cpe, match_version=False)
+
+    def dump_content(self, stream: TextIO):
+        stream.write(["E", "I"][self.include_start])
+        if self.start is not None:
+            start = self.start
+        stream.write("\n")
+        stream.write(["E", "I"][self.include_end])
+        if self.end is not None:
+            end = self.end
+        stream.write("\n")
+        self.wrapped.dump(stream)
+
+    @classmethod
+    def load_content(cls: T, stream: TextIO) -> T:
+        include_start = stream.read(1) == "I"
+        start = stream.readline()
+        if not start:
+            start = None
+        include_end = stream.read(1) == "I"
+        end = stream.readline()
+        if not end:
+            end = None
+        return cls(Testable.load(stream), start=start, end=end, include_start=include_start, include_end=include_end)
