@@ -8,7 +8,7 @@ import sys
 
 from cvss import CVSS2, CVSS3
 
-from .cpe import Testable
+from .cpe import CPE, Testable
 
 
 if sys.version_info < (3, 9):
@@ -76,7 +76,7 @@ class Configurations(TestableSequence, Testable):
         num_children = int(stream.readline())
         return Configurations(Testable.load(stream) for _ in range(num_children))
 
-    def match(self, cpe: "CPE") -> bool:
+    def match(self, cpe: CPE) -> bool:
         return any(child.match(cpe) for child in self)
 
     def __repr__(self):
