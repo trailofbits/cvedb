@@ -5,6 +5,8 @@ from typing import Optional, Tuple, Union
 
 from cvss import CVSS2, CVSS3
 
+from .cpe import Testable
+
 
 class Severity(IntEnum):
     NONE = 0
@@ -36,6 +38,7 @@ class CVE:
     descriptions: Tuple[Description, ...] = ()
     references: Tuple[Reference, ...] = ()
     assigner: Optional[str] = None
+    configurations: Tuple[Testable, ...] = ()
 
     def description(self, lang: str = "en") -> Optional[str]:
         for d in self.descriptions:

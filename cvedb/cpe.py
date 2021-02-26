@@ -1,7 +1,14 @@
+from abc import ABC
 from dataclasses import dataclass
 from enum import Enum
 import re
-from typing import Callable, Iterator, Optional, Union
+from typing import Callable, Iterable, Iterator, Optional, Tuple, Union
+import sys
+
+if sys.version_info < (3, 8):
+    from typing_extensions import Protocol, runtime_checkable
+else:
+    from typing import Protocol, runtime_checkable
 
 
 AV_STRING_REGEX = re.compile(
@@ -9,6 +16,12 @@ AV_STRING_REGEX = re.compile(
 )
 
 LANGTAG_REGEX = re.compile(r"^(([A-Za-z]{2,3})(-([A-Za-z]{2}|[0-9]{3}))?).*")
+
+
+@runtime_checkable
+class Testable(Protocol):
+    def match(self, cpe: "CPE") -> bool:
+        ...
 
 
 class Part(Enum):
@@ -73,18 +86,33 @@ AVString = Union[str, Logical]
 
 
 @dataclass(unsafe_hash=True, frozen=True, order=True)
-class CPE:
-    part: Union[Part, Logical]
-    vendor: AVString
-    product: AVString
-    version: AVString
-    update: AVString
-    edition: AVString
-    lang: Union[Language, Logical]
-    sw_edition: AVString
-    target_sw: AVString
-    target_hw: AVString
-    other: AVString
+class CPE(Testable):
+    part: Union[Part, Logical] = Logical.ANY
+    vendor: AVString = Logical.ANY
+    product: AVString = Logical.ANY
+    version: AVString = Logical.ANY
+    update: AVString = Logical.ANY
+    edition: AVString = Logical.ANY
+    lang: Union[Language, Logical] = Logical.ANY
+    sw_edition: AVString = Logical.ANY
+    target_sw: AVString = Logical.ANY
+    target_hw: AVString = Logical.ANY
+    other: AVString = Logical.ANY
+
+    @staticmethod
+    def _match(a, b) -> bool:
+        if isinstance(a, Logical):
+            if a == Logical.ANY:
+                return True
+            else:
+                return b == Logical.NA
+        return a == b
+
+    def match(self, cpe: "CPE", match_version: bool = True) -> bool:
+        return all(CPE._match(getattr(self, attr), getattr(cpe, attr)) for attr in (
+            "part", "vendor", "product", "update", "edition", "lang", "sw_edition", "target_sw",
+            "target_hw", "other"
+        )) and (not match_version or CPE._match(self.version, cpe.version))
 
 
 class FormattedStringError(ValueError):
@@ -250,10 +278,69 @@ def parse_formatted_string(fs: str) -> CPE:
     return FormattedStringParser(fs).parse()
 
 
-class CPEExpression:
+class TestError(ValueError):
     pass
 
 
-class And(CPEExpression):
-    def __init__(self, ):
-        pass
+class LogicalTest(ABC, Testable):
+    def __init__(self, children: Iterable[Union["LogicalTest", CPE]], negate: bool = False):
+        self.children: Tuple[Union[LogicalTest, CPE], ...] = tuple(children)
+        self.negate: bool = negate
+
+
+class And(LogicalTest):
+    def match(self, cpe: CPE) -> bool:
+        result = all(cpe.match(child) for child in self.children)
+        if self.negate:
+            return not result
+        else:
+            return result
+
+
+class Or(LogicalTest):
+    def match(self, cpe: CPE) -> bool:
+        result = any(cpe.match(child) for child in self.children)
+        if self.negate:
+            return not result
+        else:
+            return result
+
+
+class Negate(Testable):
+    def __init__(self, wrapped: Testable):
+        self.wrapped: Testable = wrapped
+
+    def match(self, cpe: "CPE") -> bool:
+        return not self.wrapped.match(cpe)
+
+
+class VersionRange(Testable):
+    def __init__(
+            self,
+            wrapped: CPE,
+            start: Optional[str] = None,
+            end: Optional[str] = None,
+            include_start: bool = True,
+            include_end: bool = True
+    ):
+        self.wrapped: CPE = wrapped
+        self.start: Optional[str] = start
+        self.end: Optional[str] = end
+        self.include_start: bool = include_start
+        self.include_end: bool = include_end
+
+    def match(self, cpe: "CPE") -> bool:
+        if isinstance(cpe.version, str):
+            if self.start is not None:
+                if self.include_start:
+                    if cpe.version < self.start:
+                        return False
+                elif cpe.version <= self.start:
+                    return False
+            elif self.end is not None:
+                if self.include_end:
+                    if cpe.version > self.end:
+                        return False
+                elif cpe.version >= self.end:
+                    return False
+        return self.wrapped.match(cpe, match_version=False)

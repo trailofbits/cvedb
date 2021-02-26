@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 from gzip import decompress
+import itertools
 import json
 import sys
 from typing import Any, Dict, Iterable, Iterator, List, Optional, TextIO, Union
@@ -10,6 +11,7 @@ from cvss import CVSS2, CVSS3
 from dateutil.parser import isoparse
 from tqdm import tqdm
 
+from .cpe import And, Negate, Or, parse_formatted_string, Testable, VersionRange
 from .cve import CVE, Description, Reference
 from .feed import Data, DataSource, Feed
 
@@ -81,6 +83,47 @@ class JsonDataSource(DataSource):
         return len(self.cves)
 
     @staticmethod
+    def _parse_config_node(node: Dict[str, Any]) -> Testable:
+        if "cpe23Uri" in node:
+            cpe = parse_formatted_string(node["cpe23Uri"])
+            if not node.get("vulnerable", True):
+                cpe = Negate(cpe)
+            vs = node.get("versionStartExcluding", None)
+            include_start = vs is None
+            vs = node.get("versionStartIncluding", vs)
+            ve = node.get("versionEndExcluding", None)
+            include_end = ve is None
+            ve = node.get("versionEndIncluding", ve)
+            if vs is not None or ve is not None:
+                cpe = VersionRange(cpe, start=vs, end=ve, include_start=include_start, include_end=include_end)
+            unhandled_keys = node.keys() - {"cpe23Uri", "vulnerable", "versionStartIncluding", "versionStartExcluding",
+                                            "versionEndIncluding", "versionEndExcluding"}
+            if unhandled_keys:
+                raise NotImplementedError(f"Add support for CPE 23 URI node keys {unhandled_keys!r}")
+            return cpe
+        elif "operator" in node:
+            if node["operator"].upper() == "AND":
+                op_class = And
+            elif node["operator"].upper() == "OR":
+                op_class = Or
+            else:
+                raise NotImplementedError(f"Unimplemented CVE configuration node operator {node['operator']!r}")
+            return op_class(
+                map(JsonDataSource._parse_config_node,
+                    itertools.chain(node.get("children", []), node.get("cpe_match", []))),
+                negate=not node.get("vulnerable", True)
+            )
+        else:
+            raise ValueError(f"Unknown configuration node type: {node!r}")
+
+    @staticmethod
+    def parse_configurations(config_dict: Dict[str, Any]) -> Iterator[Testable]:
+        if config_dict.get("CVE_data_version", "4.0") != "4.0":
+            raise ValueError(f"Unsupported configuration CVE_data_version: {config_dict['CVE_data_version']}")
+        for node in config_dict["nodes"]:
+            yield JsonDataSource._parse_config_node(node)
+
+    @staticmethod
     def parse_cve(cve_obj: Dict[str, Any]) -> CVE:
         cve_id = cve_obj["cve"]["CVE_data_meta"]["ID"]
         assigner = cve_obj["cve"]["CVE_data_meta"].get("ASSIGNER", None)
@@ -113,7 +156,8 @@ class JsonDataSource(DataSource):
             impact=impact,
             descriptions=descriptions,
             references=references,
-            assigner=assigner
+            assigner=assigner,
+            configurations=tuple(JsonDataSource.parse_configurations(cve_obj.get("configurations", {})))
         )
 
     @staticmethod
