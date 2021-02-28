@@ -66,7 +66,11 @@ class Testable(metaclass=TestableMeta):
 
     @classmethod
     @abstractmethod
-    def load_content(cls: T, stream: TextIO) -> T:
+    def load_content(cls: Type[T], stream: TextIO) -> T:
+        raise NotImplementedError()
+
+    @abstractmethod
+    def vulnerable_cpes(self) -> Iterator["CPE"]:
         raise NotImplementedError()
 
 
@@ -183,8 +187,11 @@ class CPE(Testable):
         stream.write("\n")
 
     @classmethod
-    def load_content(cls: T, stream: TextIO) -> T:
+    def load_content(cls: Type[T], stream: TextIO) -> T:
         return parse_formatted_string(stream.readline())
+
+    def vulnerable_cpes(self) -> Iterator["CPE"]:
+        yield self
 
 
 class FormattedStringError(ValueError):
@@ -367,7 +374,7 @@ class LogicalTest(Testable, ABC):
         return hash((self.negate,) + self.children)
 
     @classmethod
-    def load_content(cls: T, stream: TextIO) -> T:
+    def load_content(cls: Type[T], stream: TextIO) -> T:
         negate = stream.read(1) == "~"
         num_children = int(stream.readline())
         children = [Testable.load(stream) for i in range(num_children)]
@@ -381,6 +388,12 @@ class LogicalTest(Testable, ABC):
         stream.write(f"{len(self.children)!s}\n")
         for child in self.children:
             child.dump(stream)
+
+    def vulnerable_cpes(self) -> Iterator[CPE]:
+        if not self.negate:
+            return iter(self.children)
+        else:
+            return iter(())
 
 
 class And(LogicalTest):
@@ -424,8 +437,11 @@ class Negate(Testable):
         self.wrapped.dump(stream)
 
     @classmethod
-    def load_content(cls: T, stream: TextIO) -> T:
+    def load_content(cls: Type[T], stream: TextIO) -> T:
         return cls(Testable.load(stream))
+
+    def vulnerable_cpes(self) -> Iterator[CPE]:
+        return iter(())
 
 
 class VersionRange(Testable):
@@ -472,16 +488,16 @@ class VersionRange(Testable):
     def dump_content(self, stream: TextIO):
         stream.write(["E", "I"][self.include_start])
         if self.start is not None:
-            start = self.start
+            stream.write(str(self.start))
         stream.write("\n")
         stream.write(["E", "I"][self.include_end])
         if self.end is not None:
-            end = self.end
+            stream.write(str(self.end))
         stream.write("\n")
         self.wrapped.dump(stream)
 
     @classmethod
-    def load_content(cls: T, stream: TextIO) -> T:
+    def load_content(cls: Type[T], stream: TextIO) -> T:
         include_start = stream.read(1) == "I"
         start = stream.readline()
         if not start:
@@ -491,3 +507,6 @@ class VersionRange(Testable):
         if not end:
             end = None
         return cls(Testable.load(stream), start=start, end=end, include_start=include_start, include_end=include_end)
+
+    def vulnerable_cpes(self) -> Iterator[CPE]:
+        yield from self.wrapped.vulnerable_cpes()
