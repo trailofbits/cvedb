@@ -391,7 +391,8 @@ class LogicalTest(Testable, ABC):
 
     def vulnerable_cpes(self) -> Iterator[CPE]:
         if not self.negate:
-            return iter(self.children)
+            for c in self.children:
+                yield from c.vulnerable_cpes()
         else:
             return iter(())
 

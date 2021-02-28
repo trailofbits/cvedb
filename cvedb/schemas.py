@@ -68,7 +68,6 @@ REFERENCES_TABLE_CREATE = (
 
 CPES_TABLE_CREATE = (
     "CREATE TABLE IF NOT EXISTS cpes("
-    "uri VARCHAR NOT NULL, "
     "part VARCHAR NOT NULL, "
     "vendor VARCHAR NULL, "
     "product VARCHAR NULL, "
@@ -79,6 +78,15 @@ CPES_TABLE_CREATE = (
     "sw_edition VARCHAR NULL, "
     "target_sw VARCHAR NULL, "
     "other VARCHAR NULL"
+    ")"
+)
+
+
+CONFIGURATIONS_TABLE_CREATE = (
+    "CREATE TABLE IF NOT EXISTS configurations("
+    "cpe REFERENCES cpes(rowid) NOT NULL, "
+    "cve REFERENCES cves(id) NOT NULL, "
+    "PRIMARY KEY (cpe, cve)"
     ")"
 )
 
@@ -281,6 +289,7 @@ class SchemaV1(SchemaV0):
         super().create(connection, cve_table_create=CVE_TABLE_CREATE_V1)
         connection.execute(REFERENCES_TABLE_CREATE)
         connection.execute(CPES_TABLE_CREATE)
+        connection.execute(CONFIGURATIONS_TABLE_CREATE)
         connection.execute("PRAGMA user_version = 1")
         return cls(connection)
 
@@ -323,6 +332,30 @@ class SchemaV1(SchemaV0):
                     cve.cve_id, ref.name, ref.url
                 )
             )
+        c = self.connection.cursor()
+        cols = ("part", "vendor", "product", "version", "update_str", "edition", "language", "sw_edition", "target_sw",
+                "other")
+        col_names = ", ".join(cols)
+        for cpe in cve.configurations.vulnerable_cpes():
+            c.execute(
+                "INSERT OR IGNORE INTO cpes ("
+                f"{col_names}"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ",
+                [str(c) for c in
+                    (cpe.part.value, cpe.vendor, cpe.product, cpe.version, cpe.update, cpe.edition, cpe.lang,
+                     cpe.sw_edition, cpe.target_sw, cpe.other)]
+            )
+            if c.lastrowid is None:
+                # the CPE already existed
+                args = " AND ".join(f"{col} = ?" for col in cols)
+                c.execute(f"SELECT rowid FROM cpes WHERE {args}", (cpe.part.value, cpe.vendor, cpe.product, cpe.version,
+                                                                   cpe.update, cpe.edition, cpe.lang,
+                                                                   cpe.sw_edition, cpe.target_sw, cpe.other))
+                cpe_row = c.fetchone()[0]
+            else:
+                cpe_row = c.lastrowid
+            c.execute("INSERT OR REPLACE INTO configurations (cpe, cve) VALUES (?, ?)", (cpe_row, cve.cve_id))
+
 
     def cve_iter(
             self,

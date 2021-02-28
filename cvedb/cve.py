@@ -3,7 +3,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import IntEnum
-from typing import Iterable, Optional, overload, TextIO, Tuple, Union
+from typing import Iterable, Iterator, Optional, overload, TextIO, Tuple, Union
 import sys
 
 from cvss import CVSS2, CVSS3
@@ -81,6 +81,10 @@ class Configurations(TestableSequence, Testable):
 
     def __repr__(self):
         return f"{self.__class__.__name__}({self.testable!r})"
+
+    def vulnerable_cpes(self) -> Iterator[CPE]:
+        for testable in self:
+            yield from testable.vulnerable_cpes()
 
 
 @dataclass(unsafe_hash=True, order=True, frozen=True)
