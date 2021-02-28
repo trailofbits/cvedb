@@ -51,7 +51,7 @@ class Configurations(TestableSequence, Testable):
 
     @overload
     @abstractmethod
-    def __getitem__(self, s: slice) -> Sequence[Testable]: ...
+    def __getitem__(self, s: slice) -> TestableSequence: ...
 
     def __getitem__(self, i: int) -> Testable:
         return self.testable[i]
