@@ -97,18 +97,23 @@ class Language:
             raise ValueError(f"Invalid ISO 639 language code: {iso_639_code!r}")
         elif region == "":
             region = None
-        elif isinstance(region, str) and len(region) != 2:
-            if len(region) == 3:
-                # see if it is actually a three digit UN M.49 code:
-                try:
-                    region = int(region)
-                except ValueError:
-                    pass
-            if isinstance(region, str):
+        elif isinstance(region, str):
+            if len(region) != 2:
+                if len(region) == 3:
+                    # see if it is actually a three digit UN M.49 code:
+                    try:
+                        region = int(region)
+                    except ValueError:
+                        pass
+                if isinstance(region, str):
+                    raise ValueError(f"Invalid ISO 3166-1 region code: {region!r}")
+            elif not re.match(r"[A-Za-z]{2}", region):
                 raise ValueError(f"Invalid ISO 3166-1 region code: {region!r}")
+            else:
+                region = region.lower()
         elif isinstance(region, int) and (region < 0 or region > 999):
             raise ValueError(f"Invalid UN M.49 region code: {region!r}")
-        self.code: str = iso_639_code
+        self.code: str = iso_639_code.lower()
         self.region: Optional[Union[str, int]] = region
 
     def __eq__(self, other):
@@ -131,8 +136,10 @@ class Language:
     def __str__(self):
         if self.region is None:
             return self.code
+        elif isinstance(self.region, int):
+            return f"{self.code}-{self.region:03}"
         else:
-            return f"{self.code}-{self.region!s}"
+            return f"{self.code}-{self.region}"
 
     def __repr__(self):
         return f"{self.__class__.__name__}(iso_639_code={self.code!r}, region={self.region!r})"
