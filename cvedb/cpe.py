@@ -1,5 +1,5 @@
 from abc import ABC, ABCMeta, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from enum import Enum
 from io import StringIO
 import re
@@ -154,6 +154,12 @@ class CPE(Testable):
     target_sw: AVString = Logical.ANY
     target_hw: AVString = Logical.ANY
     other: AVString = Logical.ANY
+
+    def is_complete_wildcard(self) -> bool:
+        for field in fields(self.__class__):
+            if getattr(self, field.name) != Logical.ANY:
+                return False
+        return True
 
     @property
     def uid(self) -> str:

@@ -1,7 +1,7 @@
 from unittest import TestCase
 
 from cvedb.db import CVEdb
-from cvedb.cpe import Logical, parse_formatted_string, Part
+from cvedb.cpe import CPE, Logical, parse_formatted_string, Part
 from cvedb.cve import Configurations
 
 
@@ -26,3 +26,7 @@ class TestCPE(TestCase):
                 if i > 100:
                     break
                 self.assertEqual(cve.configurations, Configurations.loads(cve.configurations.dumps()))
+
+    def test_wildcards(self):
+        self.assertTrue(CPE().is_complete_wildcard())
+        self.assertFalse(CPE(vendor="foo").is_complete_wildcard())
