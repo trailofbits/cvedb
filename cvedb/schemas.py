@@ -356,7 +356,6 @@ class SchemaV1(SchemaV0):
                 cpe_row = c.lastrowid
             c.execute("INSERT OR REPLACE INTO configurations (cpe, cve) VALUES (?, ?)", (cpe_row, cve.cve_id))
 
-
     def cve_iter(
             self,
             rows: Iterator[Tuple[Union[float, int, str], ...]],
