@@ -112,7 +112,7 @@ class Select:
     where: Optional[Query] = None
     order_by: Optional[str] = None
     limit: Optional[int] = None
-    params: List[Tuple[Optional[Union[int, float, str]], ...]] = field(default_factory=list)
+    params: List[Optional[Union[int, float, str]]] = field(default_factory=list)
 
     def __post_init__(self):
         if not isinstance(self.params, list):
