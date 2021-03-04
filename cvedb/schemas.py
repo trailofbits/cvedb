@@ -12,7 +12,7 @@ from .search import (
     AfterModifiedDateQuery, AfterPublishedDateQuery, BeforeModifiedDateQuery, BeforePublishedDateQuery, CompoundQuery,
     CPEQuery, OrQuery, SearchQuery, Sort, TermQuery
 )
-from .sql import And, Select, Or, Query, SimpleQuery
+from .sql import And, Select, Or, Query, SimpleQuery, TRUE
 
 
 SCHEMAS: Dict[int, Type["Schema"]] = {}
