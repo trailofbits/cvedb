@@ -414,7 +414,7 @@ class And(LogicalTest):
     uid = "a"
 
     def match(self, cpe: CPE) -> bool:
-        result = all(cpe.match(child) for child in self.children)
+        result = all(child.match(cpe) for child in self.children)
         if self.negate:
             return not result
         else:
@@ -425,7 +425,7 @@ class Or(LogicalTest):
     uid = "o"
 
     def match(self, cpe: CPE) -> bool:
-        result = any(cpe.match(child) for child in self.children)
+        result = any(child.match(cpe) for child in self.children)
         if self.negate:
             return not result
         else:
