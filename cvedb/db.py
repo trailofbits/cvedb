@@ -68,7 +68,13 @@ class DbBackedFeed(Feed):
             # the data in the DB is new enough:
             return False
         else:
-            return super().is_out_of_date()
+            out_of_date = super().is_out_of_date()
+            with self.connection as c:
+                c.execute(
+                    "UPDATE feeds SET last_checked = ? WHERE rowid = ?",
+                    (datetime.fromtimestamp(time()).astimezone().timestamp(), self.feed_id)
+                )
+            return out_of_date
 
     def reload(self, existing_data: Optional[Data] = None) -> DataSource:
         if existing_data is not None and not self.is_out_of_date():
