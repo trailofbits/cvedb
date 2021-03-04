@@ -10,10 +10,7 @@ from tqdm import tqdm
 from .cve import CVE
 from .feed import Data, DataSource, Feed, FEEDS, MAX_DATA_AGE_SECONDS
 from .schemas import Schema
-from .search import (
-    AfterModifiedDateQuery, AfterPublishedDateQuery, BeforeModifiedDateQuery, BeforePublishedDateQuery, CompoundQuery,
-    OrQuery, SearchQuery, Sort, TermQuery
-)
+from .search import SearchQuery, Sort
 
 DEFAULT_DB_PATH = Path.home() / ".config" / "cvedb" / "cvedb.sqlite"
 
@@ -78,6 +75,8 @@ class DbBackedFeed(Feed):
             return existing_data
         with tqdm(desc=self.name, unit=" CVEs", leave=False) as t:
             new_data = self.parent.reload(existing_data)
+            if new_data is existing_data:
+                return new_data
             if isinstance(new_data, Sized):
                 t.total = len(new_data)
             with self.connection as c:
@@ -93,7 +92,7 @@ class DbBackedFeed(Feed):
                     for cve in new_data:
                         self.schema.add(cve, self.feed_id)
                         t.update(1)
-                    c.commit()
+                c.commit()
         return CVEdbDataSource(self)
 
     def data(self, force_reload: bool = False) -> "CVEdbData":
@@ -142,6 +141,11 @@ class CVEdbData(Data):
         else:
             self.feeds = [source]
 
+    @property
+    def schema(self) -> Schema:
+        # The following assumes that all feeds have the same schema, which should always be true
+        return self.feeds[0].schema
+
     def __iter__(self) -> Iterator[CVE]:
         self.reload()
         return itertools.chain(*(iter(CVEdbDataSource(feed)) for feed in self.feeds))
@@ -152,43 +156,6 @@ class CVEdbData(Data):
         c.execute("SELECT COUNT(*) FROM cves")
         return c.fetchone()[0]
 
-    @staticmethod
-    def _to_sql_clause(query: SearchQuery) -> Tuple[Optional[str], Optional[Tuple[Union[str, int], ...]]]:
-        if isinstance(query, TermQuery):
-            query_text = query.query
-            description_query = "d.description"
-            id_query = "c.id"
-            if not query.case_sensitive:
-                query_text = query_text.upper()
-                description_query = f"UPPER({description_query})"
-                id_query = f"UPPER({id_query})"
-            return f"({description_query} LIKE ? OR {id_query} LIKE ?)", (f"%{query_text}%", f"%{query_text}%")
-        elif isinstance(query, BeforePublishedDateQuery):
-            return f"c.published <= ?", (int(query.date.astimezone().timestamp()),)
-        elif isinstance(query, BeforeModifiedDateQuery):
-            return f"c.last_modified <= ?", (int(query.date.astimezone().timestamp()),)
-        elif isinstance(query, AfterPublishedDateQuery):
-            return f"c.published >= ?", (int(query.date.astimezone().timestamp()),)
-        elif isinstance(query, AfterModifiedDateQuery):
-            return f"c.last_modified >= ?", (int(query.date.astimezone().timestamp()),)
-        elif isinstance(query, CompoundQuery):
-            if len(query.sub_queries) == 0:
-                return ["true", "false"][isinstance(query, OrQuery)], ()
-            elif len(query.sub_queries) == 1:
-                return CVEdbData._to_sql_clause(query.sub_queries[0])
-            components = []
-            params = []
-            for sub_query in query.sub_queries:
-                c, p = CVEdbData._to_sql_clause(sub_query)
-                if c is None or p is None:
-                    return None, None
-                components.append(c)
-                params.extend(p)
-            compound_query = [" AND ", " OR "][isinstance(query, OrQuery)].join(components)
-            return f"({compound_query})", tuple(params)
-        else:
-            return None, None
-
     def search(
             self,
             *queries: Union[str, SearchQuery],
@@ -196,41 +163,11 @@ class CVEdbData(Data):
             ascending: bool = True
     ) -> Iterator[CVE]:
         self.reload()
-        query = Data.make_query(*queries)
-        query_string, query_params = CVEdbData._to_sql_clause(query)
-        if query_string is None or query_params is None:
-            # the query could not be converted to a SQL query
-            yield from super().search(query, sort=sort, ascending=ascending)
-        feeds_where_clause = f"c.feed IN ({', '.join('?' * len(self.feeds)) })"
-        params = [feed.feed_id for feed in self.feeds]
-        c = self.connection.cursor()
-        params.extend(query_params)
-        order_by = ""
-        if sort:
-            components = []
-            asc = ["DESC", "ASC"][ascending]
-            for s in sort:
-                if s == Sort.CVE_ID:
-                    components.append("c.id")
-                elif s == Sort.DESCRIPTION:
-                    components.append("d.description")
-                elif s == Sort.LAST_MODIFIED_DATE:
-                    components.append("c.last_modified")
-                elif s == Sort.PUBLISHED_DATE:
-                    components.append("c.published")
-                elif s == Sort.IMPACT:
-                    components.append("c.base_score")
-                elif s == Sort.SEVERITY:
-                    components.append("c.severity")
-                else:
-                    raise NotImplementedError(f"TODO: Add support for {s!r}")
-                components[-1] = f"{components[-1]} {asc}"
-            order_by = f"ORDER BY {', '.join(components)}"
-        c.execute("SELECT DISTINCT c.* FROM descriptions d INNER JOIN cves c ON d.cve = c.id "
-                  f"WHERE {feeds_where_clause} AND {query_string} {order_by}",
-                  params)
-        # The following assumes that all feeds have the same schema, which should always be true
-        yield from self.feeds[0].schema.cve_iter(c.fetchall())
+        try:
+            return self.schema.search(*queries, sort=sort, ascending=ascending, db_data=self)
+        except ValueError:
+            pass
+        return super().search(*queries, sort=sort, ascending=ascending)
 
     def reload(self):
         out_of_date_feeds = [feed for feed in self.feeds if feed.is_out_of_date()]
