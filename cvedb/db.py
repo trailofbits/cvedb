@@ -3,7 +3,7 @@ import itertools
 from pathlib import Path
 from sqlite3 import connect, Connection
 from time import time
-from typing import Iterable, Iterator, List, Optional, Sized, Tuple, Union
+from typing import Iterable, Iterator, List, Optional, Sized, Union
 
 from tqdm import tqdm
 
