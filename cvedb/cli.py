@@ -3,13 +3,15 @@ from datetime import datetime
 from dateutil.parser import isoparse, ParserError
 import pkg_resources
 import sys
-from typing import List, Optional
+from typing import List, Optional, Union
 
+from .cpe import Logical
 from .db import CVEdb, DEFAULT_DB_PATH
 from .feed import Data
 from .printing import print_cves
 from .search import (
-    AfterModifiedDateQuery, AfterPublishedDateQuery, AndQuery, BeforeModifiedDateQuery, BeforePublishedDateQuery, Sort
+    AfterModifiedDateQuery, AfterPublishedDateQuery, AndQuery, BeforeModifiedDateQuery, BeforePublishedDateQuery,
+    CPEQuery, Sort
 )
 
 
@@ -25,6 +27,13 @@ def parse_date(date_str: str) -> datetime:
     raise argparse.ArgumentTypeError(f"Invalid date {date_str!r}. Dates must be either a four digit year or an ISO "
                                      "8601 string. See https://dateutil.readthedocs.io/en/stable/parser.html "
                                      "for examples.")
+
+
+def parse_cpe_arg(cpe_str: str) -> Union[Logical, str]:
+    for logical in Logical:
+        if logical.value == cpe_str:
+            return logical
+    return cpe_str
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -45,8 +54,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--modified-after", "-ma", type=parse_date, help="only list CVEs modified after the given date")
     parser.add_argument("--modified-before", "-mb", type=parse_date,
                         help="only list CVEs modified before the given date")
+
+    cpe_group = parser.add_argument_group(title="Common Platform Enumeration (CPE)",
+                                          description="search options filtering by CPE")
+    cpe_group.add_argument("--vendor", type=parse_cpe_arg, nargs="?", default=Logical.ANY,
+                           help="search by software/hardware vendor")
+    cpe_group.add_argument("--software-version", type=parse_cpe_arg, nargs="?", default=Logical.ANY,
+                           help="search by version")
+
     parser.add_argument("--ansi", action="store_true", help="force ANSI colored output even when not printing to a TTY "
                                                             "(e.g., when piping output to a file or pager)")
+
     parser.add_argument("--version", "-v", action="store_true", help="print the version and exit")
 
     args = parser.parse_args(argv[1:])
@@ -69,6 +87,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         query.append(AfterModifiedDateQuery(args.modified_after))
     if args.SEARCH_TERM:
         query.append(Data.make_query(*args.SEARCH_TERM))
+
+    if args.software_version != Logical.ANY or args.vendor != Logical.ANY:
+        cpe = CPEQuery(
+            vendor=args.vendor,
+            version=args.software_version
+        )
+        query.append(cpe)
     if len(query) == 1:
         query = query[0]
     elif query:

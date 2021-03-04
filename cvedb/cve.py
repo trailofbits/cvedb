@@ -77,6 +77,9 @@ class Configurations(TestableSequence, Testable):
         return Configurations(Testable.load(stream) for _ in range(num_children))
 
     def match(self, cpe: CPE) -> bool:
+        for child in self:
+            if child.match(cpe):
+                return True
         return any(child.match(cpe) for child in self)
 
     def __repr__(self):

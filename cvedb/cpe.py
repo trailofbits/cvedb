@@ -179,6 +179,11 @@ class CPE(Testable):
                 return True
             else:
                 return b == Logical.NA
+        elif isinstance(b, Logical):
+            if b == Logical.ANY:
+                return True
+            else:
+                return a == Logical.NA
         return a == b
 
     def match(self, cpe: "CPE", match_version: bool = True) -> bool:

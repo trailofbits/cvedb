@@ -1,8 +1,9 @@
 from abc import ABC, abstractmethod
 from datetime import datetime
 from enum import Enum
-from typing import Any, Tuple
+from typing import Any, Optional, Tuple
 
+from .cpe import CPE
 from .cve import CVE
 
 
@@ -156,3 +157,14 @@ class AndQuery(CompoundQuery):
 class OrQuery(CompoundQuery):
     def matches(self, cve: CVE) -> bool:
         return any(q.matches(cve) for q in self.sub_queries)
+
+
+class CPEQuery(SearchQuery):
+    def __init__(self, cpe: Optional[CPE] = None, **kwargs):
+        if cpe is None:
+            self.cpe: CPE = CPE(**kwargs)
+        else:
+            self.cpe = cpe
+
+    def matches(self, cve: CVE) -> bool:
+        return cve.configurations.match(self.cpe)

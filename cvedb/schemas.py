@@ -2,11 +2,17 @@ from abc import abstractmethod, ABC
 from datetime import datetime, timezone
 from sqlite3 import Connection
 import sys
-from typing import Any, Callable, Dict, Iterator, Optional, Tuple, Type, TypeVar, Union
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Tuple, Type, TypeVar, Union
 
 from cvss import CVSS2, CVSS3, CVSSError
 
+from .feed import Data
 from .cve import Configurations, CVE, Description, Reference
+from .search import (
+    AfterModifiedDateQuery, AfterPublishedDateQuery, BeforeModifiedDateQuery, BeforePublishedDateQuery, CompoundQuery,
+    CPEQuery, OrQuery, SearchQuery, Sort, TermQuery
+)
+from .sql import And, Select, CompoundQuery, Or, Query, SimpleQuery
 
 
 SCHEMAS: Dict[int, Type["Schema"]] = {}
@@ -193,6 +199,16 @@ class Schema(ABC):
     def cve_iter(self, rows: Iterator[Tuple[Union[float, int, str], ...]]) -> Iterator[CVE]:
         raise NotImplementedError()
 
+    @abstractmethod
+    def search(
+            self,
+            *queries: Union[str, SearchQuery],
+            db_data,
+            sort: Iterable[Sort] = (Sort.CVE_ID,),
+            ascending: bool = True,
+    ) -> Iterator[CVE]:
+        raise NotImplementedError()
+
 
 @register_schema(0)
 class SchemaV0(Schema):
@@ -281,6 +297,113 @@ class SchemaV0(Schema):
                 **kwargs
             )
 
+    @classmethod
+    def to_query(cls, query: SearchQuery) -> Optional[Select]:
+        if isinstance(query, TermQuery):
+            query_text = query.query
+            description_query = "d.description"
+            id_query = "c.id"
+            if not query.case_sensitive:
+                query_text = query_text.upper()
+                description_query = f"UPPER({description_query})"
+                id_query = f"UPPER({id_query})"
+            return Select("", "", where=SimpleQuery(
+                f"({description_query} LIKE ? OR {id_query} LIKE ?)"
+            ), params=[f"%{query_text}%", f"%{query_text}%"])
+        elif isinstance(query, BeforePublishedDateQuery):
+            return Select("", "", where=SimpleQuery("c.published <= ?"),
+                          params=[int(query.date.astimezone().timestamp())])
+        elif isinstance(query, BeforeModifiedDateQuery):
+            return Select("", "", where=SimpleQuery("c.last_modified <= ?"),
+                          params=[int(query.date.astimezone().timestamp())])
+        elif isinstance(query, AfterPublishedDateQuery):
+            return Select("", "", where=SimpleQuery("c.published >= ?"),
+                          params=[int(query.date.astimezone().timestamp())])
+        elif isinstance(query, AfterModifiedDateQuery):
+            return Select("", "", where=SimpleQuery("c.last_modified >= ?"),
+                          params=[int(query.date.astimezone().timestamp())])
+        elif isinstance(query, CompoundQuery):
+            if len(query.sub_queries) == 0:
+                return Select("", "")
+            elif len(query.sub_queries) == 1:
+                return cls.to_sql_clause(query.sub_queries[0])
+            select: Optional[Select] = None
+            sub_selects: List[Select] = []
+            params = []
+            for sub_query in query.sub_queries:
+                sub_select = cls.to_query(sub_query)
+                if sub_select is None:
+                    return None
+                sub_selects.append(sub_select)
+                params.extend(sub_select.params)
+            if isinstance(query, OrQuery):
+                return Select("", "", where=Or(*(s.where for s in sub_selects if s.where is not None)), params=params)
+            else:
+                return Select("", "", where=And(*(s.where for s in sub_selects if s.where is not None)), params=params)
+        else:
+            return None
+
+    def search(
+            self,
+            *queries: Union[str, SearchQuery],
+            db_data,
+            sort: Iterable[Sort] = (Sort.CVE_ID,),
+            ascending: bool = True
+    ) -> Iterator[CVE]:
+        query = Data.make_query(*queries)
+        select = self.to_query(query)
+        if select is None:
+            # the query could not be converted to a SQL query
+            raise ValueError("The query could not be converted to a SQL query")
+        feeds_where_clause = SimpleQuery(f"c.feed IN ({', '.join('?' * len(db_data.feeds)) })")
+        params = [feed.feed_id for feed in db_data.feeds]
+        if select.where is None:
+            select.where = feeds_where_clause
+            select.params = params
+        else:
+            select.where = And(select.where, feeds_where_clause)
+            select.params.extend(params)
+        c = self.connection.cursor()
+        if sort:
+            components = []
+            asc = ["DESC", "ASC"][ascending]
+            for s in sort:
+                if s == Sort.CVE_ID:
+                    components.append("c.id")
+                elif s == Sort.DESCRIPTION:
+                    components.append("d.description")
+                elif s == Sort.LAST_MODIFIED_DATE:
+                    components.append("c.last_modified")
+                elif s == Sort.PUBLISHED_DATE:
+                    components.append("c.published")
+                elif s == Sort.IMPACT:
+                    components.append("c.base_score")
+                elif s == Sort.SEVERITY:
+                    components.append("c.severity")
+                else:
+                    raise NotImplementedError(f"TODO: Add support for {s!r}")
+                components[-1] = f"{components[-1]} {asc}"
+            select.order_by = ", ".join(components)
+        self.finalize_query(select)
+        c.execute(select.to_sql(), select.params)
+        # The following assumes that all feeds have the same schema, which should always be true
+        for cve in self.cve_iter(c.fetchall()):
+            if query.matches(cve):
+                yield cve
+
+    def finalize_query(self, select: Select):
+        select.columns = "DISTINCT c.*"
+        select.from_tables = "descriptions d INNER JOIN cves c ON d.cve = c.id"
+
+
+class _CPEQuery(Query):
+    def __init__(self, query: CPEQuery):
+        self.query: CPEQuery = query
+
+    def to_sql(self) -> str:
+        assert False  # This code should never be executed
+        return ""
+
 
 @register_schema(1)
 class SchemaV1(SchemaV0):
@@ -355,6 +478,36 @@ class SchemaV1(SchemaV0):
             else:
                 cpe_row = c.lastrowid
             c.execute("INSERT OR REPLACE INTO configurations (cpe, cve) VALUES (?, ?)", (cpe_row, cve.cve_id))
+
+    @classmethod
+    def to_query(cls, query: SearchQuery) -> Optional[Select]:
+        if isinstance(query, CPEQuery):
+            return Select("", "", where=_CPEQuery(query))
+        else:
+            return super().to_query(query)
+
+    def finalize_query(self, select: Select):
+        cpe_queries = []
+        for query in select.where.traverse():
+            if isinstance(query, _CPEQuery):
+                cpe_queries.append(query.query.cpe)
+                query.remove_from_parent()
+        super().finalize_query(select)
+        if cpe_queries:
+            select.from_tables = "(((descriptions d INNER JOIN cves c ON d.cve = c.id) " \
+                                 "INNER JOIN configurations f ON f.cve = c.id) "\
+                                 "INNER JOIN cpes p ON p.rowid == f.cpe)"
+            if select.where is None:
+                select.where = TRUE
+            for query in cpe_queries:
+                for attr in (
+                        "part", "vendor", "product", "version", "update", "edition", "lang", "sw_edition", "target_sw",
+                        "target_hw", "other"
+                ):
+                    value = getattr(query, attr)
+                    if isinstance(value, str):
+                        select.where = And.create(select.where, SimpleQuery(f"p.{attr} = ?"))
+                        select.params.append(value)
 
     def cve_iter(
             self,
