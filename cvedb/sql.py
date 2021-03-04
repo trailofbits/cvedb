@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Iterable, Iterator, List, Optional, Tuple, Union
+from typing import Iterable, Iterator, List, Optional, Union
 
 
 class Query(ABC):
@@ -16,10 +16,10 @@ class Query(ABC):
     def remove_from_parent(self):
         if self.parent is None:
             return
-        elif not hasattr(self.parent, "remove"):
-            raise TypeError(f"Query {query} cannot be removed from {self.parent}")
-        else:
+        elif hasattr(self.parent, "remove"):
             self.parent.remove(self)
+        else:
+            raise TypeError(f"Query {self} cannot be removed from {self.parent}")
 
 
 class TrueQuery(Query):
