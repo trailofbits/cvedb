@@ -267,7 +267,7 @@ class SchemaV0(Schema):
     def cve_iter(
             self,
             rows: Iterator[Tuple[Union[float, int, str], ...]],
-            extra_row_handler: Callable[[Tuple[Union[float, int, str], ...], Dict[str, Any]], Any] = lambda *_:None
+            extra_row_handler: Callable[[Tuple[Union[float, int, str], ...], Dict[str, Any]], Any] = lambda *_: None
     ) -> Iterator[CVE]:
         for cve_id, _, published, last_modified, impact_vector, *extra_rows in rows:
             if impact_vector is None:
