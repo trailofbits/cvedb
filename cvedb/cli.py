@@ -16,7 +16,7 @@ from .search import (
 
 
 def version() -> str:
-    return pkg_resources.require("it-depends")[0].version
+    return pkg_resources.require("cvedb")[0].version
 
 
 def parse_date(date_str: str) -> datetime:
