@@ -76,10 +76,14 @@ class DbBackedFeed(Feed):
                 )
             return out_of_date
 
-    def reload(self, existing_data: Optional[Data] = None) -> DataSource:
-        if existing_data is not None and not self.is_out_of_date():
+    def reload(self, existing_data: Optional[Data] = None, force: bool = False) -> DataSource:
+        if not force and existing_data is not None and not self.is_out_of_date():
             return existing_data
         with tqdm(desc=self.name, unit=" CVEs", leave=False) as t:
+            if existing_data is not None:
+                existing_modified_time = existing_data.last_modified_date
+            else:
+                existing_modified_time = None
             new_data = self.parent.reload(existing_data)
             if new_data is existing_data:
                 return new_data
@@ -90,7 +94,7 @@ class DbBackedFeed(Feed):
                     "UPDATE feeds SET last_checked = ? WHERE rowid = ?",
                     (datetime.fromtimestamp(time()).astimezone().timestamp(), self.feed_id)
                 )
-                if new_data is not existing_data:
+                if existing_modified_time is None or new_data.last_modified_date != existing_modified_time:
                     c.execute(
                         "UPDATE feeds SET last_modified = ? WHERE rowid = ?",
                         (new_data.last_modified_date.astimezone().timestamp(), self.feed_id)
@@ -178,7 +182,7 @@ class CVEdbData(Data):
     def reload(self):
         out_of_date_feeds = [feed for feed in self.feeds if feed.is_out_of_date()]
         for feed in tqdm(out_of_date_feeds, desc="updating", unit=" feeds", leave=False):
-            feed.reload(feed.data())
+            feed.reload(feed.data(), force=True)
 
 
 class CVEdb(Feed):
@@ -202,7 +206,7 @@ class CVEdb(Feed):
     def data(self, force_reload: bool = False) -> CVEdbData:
         return CVEdbData(self)
 
-    def reload(self, existing_data: Optional[Data] = None) -> CVEdbDataSource:
+    def reload(self, existing_data: Optional[Data] = None, force: bool = False) -> CVEdbDataSource:
         return CVEdbDataSource(self)
 
     @staticmethod
