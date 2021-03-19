@@ -8,7 +8,7 @@ from typing import Any, Callable, Dict, FrozenSet, Iterable, Iterator, Optional,
 from .cve import CVE
 from .search import OrQuery, SearchQuery, Sort, TermQuery
 
-MAX_DATA_AGE_SECONDS: int = 14400  # 4 hours
+MAX_DATA_AGE_SECONDS: int = 86400  # 1 day
 
 
 if version_info < (3, 9):
