@@ -14,7 +14,7 @@ setup(
     license="LGPL-3.0-or-later",
     url="https://github.com/trailofbits/cvedb",
     author="Trail of Bits",
-    version="0.0.3",
+    version="0.0.4",
     packages=find_packages(exclude=["test"]),
     python_requires=">=3.6",
     install_requires=[
