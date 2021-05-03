@@ -3,6 +3,7 @@ from datetime import datetime
 from gzip import decompress
 import itertools
 import json
+import pkg_resources
 import sys
 from typing import Any, Dict, Iterable, Iterator, List, Optional, TextIO, Union
 import urllib.request
@@ -174,7 +175,16 @@ class JsonDataSource(DataSource):
 
 
 def download(url: str, size: Optional[int] = None, show_progress: bool = True) -> bytes:
-    with urllib.request.urlopen(url) as req:
+    cvedb_version = pkg_resources.require("cvedb")[0].version
+    request = urllib.request.Request(
+        url=url,
+        data=None,
+        headers={
+            "User-Agent":
+                f"Mozilla/5.0 ({sys.platform}) AppleWebKit/605.1.15 (KHTML, like Gecko) CVEdb/{cvedb_version}"
+        }
+    )
+    with urllib.request.urlopen(request) as req:
         if not show_progress:
             return req.read()
         ret = bytearray()
