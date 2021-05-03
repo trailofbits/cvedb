@@ -18,9 +18,9 @@ setup(
     packages=find_packages(exclude=["test"]),
     python_requires=">=3.6",
     install_requires=[
-        "cvss~=2.2",
-        "python-dateutil~=2.8.1",
-        "tqdm~=4.48.0"
+        "cvss>=2.2",
+        "python-dateutil>=2.8.1",
+        "tqdm>=4.48.0"
     ] + extra_requires,
     extras_require={
         "dev": ["flake8", "pytest", "rstr~=2.2.6", "twine"]
