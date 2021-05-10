@@ -3,6 +3,7 @@ from datetime import datetime
 from gzip import decompress
 import itertools
 import json
+from pathlib import Path
 import pkg_resources
 import sys
 from typing import Any, Dict, Iterable, Iterator, List, Optional, TextIO, Union
@@ -17,6 +18,7 @@ from .cve import Configurations, CVE, Description, Reference
 from .feed import Data, DataSource, Feed
 
 BASE_JSON_URL: str = "https://nvd.nist.gov/feeds/json/cve/1.1/nvdcve-1.1-"
+PRE_SEED_DATA_DIR: Path = Path(__file__).absolute().parent / "data"
 
 
 def camel_to_underscore(text: str) -> str:
@@ -209,8 +211,16 @@ class JsonFeed(Feed):
         super().__init__(name, initial_data)
         self.meta_url: str = f"{BASE_JSON_URL}{self.name}.meta"
         self.gz_url: str = f"{BASE_JSON_URL}{self.name}.json.gz"
+        self.cached_meta_path: Path = PRE_SEED_DATA_DIR / f"nvdcve-1.1-{self.name}.meta"
+        self.cached_json_path: Path = PRE_SEED_DATA_DIR / f"nvdcve-1.1-{self.name}.json.gz"
 
     def reload(self, existing_data: Optional[Data] = None) -> DataSource:
+        if existing_data is None or len(existing_data) == 0:
+            # This is our first time loading this feed, so use the version shipped with CVEdb, if it exists:
+            if self.cached_json_path.exists() and self.cached_meta_path.exists():
+                with open(self.cached_meta_path, "r") as meta:
+                    with open(self.cached_json_path, "rb") as compressed_json:
+                        return JsonDataSource.load(json.loads(decompress(compressed_json.read())), Meta.load(meta))
         with urllib.request.urlopen(self.meta_url) as req:
             new_meta = Meta.load(req)
         if existing_data is not None and existing_data.last_modified_date is not None and \
