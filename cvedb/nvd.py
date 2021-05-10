@@ -97,8 +97,10 @@ class JsonDataSource(DataSource):
             ve = node.get("versionEndIncluding", ve)
             if vs is not None or ve is not None:
                 cpe = VersionRange(cpe, start=vs, end=ve, include_start=include_start, include_end=include_end)
+            if node.get("cpe_name"):
+                raise NotImplementedError("Add support for cpe_name key with value")
             unhandled_keys = node.keys() - {"cpe23Uri", "vulnerable", "versionStartIncluding", "versionStartExcluding",
-                                            "versionEndIncluding", "versionEndExcluding"}
+                                            "versionEndIncluding", "versionEndExcluding", "cpe_name"}
             if unhandled_keys:
                 raise NotImplementedError(f"Add support for CPE 23 URI node keys {unhandled_keys!r}")
             return cpe
