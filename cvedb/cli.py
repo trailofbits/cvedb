@@ -42,6 +42,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     parser = argparse.ArgumentParser(description="A Common Vulnerabilities and Exposures (CVE) database")
     parser.add_argument("SEARCH_TERM", type=str, nargs="*", help="search terms to query")
+    parser.add_argument("--update", "-u", action="store_true", help="update the database to the latest version; this "
+                                                                    "requires an Internet connection")
     parser.add_argument("--database", "-db", type=str, nargs="?", default=DEFAULT_DB_PATH,
                         help=f"alternative path to load/store the database (default is {DEFAULT_DB_PATH!s})")
     parser.add_argument("--sort", "-s", nargs="*", default=("cve",),
@@ -66,8 +68,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                                                             "(e.g., when piping output to a file or pager)")
 
     parser.add_argument("--version", "-v", action="store_true", help="print the version and exit")
+    parser.add_argument("--data-version", "-dv", action="store_true", help="print the version of each of the CVE data "
+                                                                           "feeds and exit")
 
     args = parser.parse_args(argv[1:])
+
+    if args.update:
+        with CVEdb.open(args.database) as db:
+            db.reload(force=True)
 
     if args.version:
         if sys.stdout.isatty():
@@ -75,6 +83,43 @@ def main(argv: Optional[List[str]] = None) -> int:
         else:
             print(version())
         return 0
+    elif args.data_version:
+        with CVEdb.open(args.database) as db:
+            rows = [["Feed", "Last Modified", "Last Checked", "# CVEs"]]
+            for feed in db.feeds:
+                lm: Union[Optional[datetime], str] = feed.last_modified()
+                if lm is None:
+                    lm = "never"
+                else:
+                    lm = lm.strftime("%Y-%m-%d")
+                lc: Union[Optional[datetime], str] = feed.last_checked()
+                if lc is None:
+                    lc = "never"
+                else:
+                    lc = lc.strftime("%Y-%m-%d")
+                rows.append([feed.name, lm, lc, str(len(feed.data()))])
+            num_cols = len(rows[0])
+            col_widths = [max(len(row[i]) for row in rows) for i in range(num_cols)]
+            total_width = sum(col_widths) + num_cols + 1
+            sys.stdout.write(f"+{'=' * (total_width - 2)}+\n")
+            header = f"Database: {args.database!s}"
+            if len(header) + 2 > total_width:
+                header = f"Database: {str(args.database)[:total_width - 15]}..."
+            else:
+                header = f"{' ' * ((total_width - len(header)) // 2)}{header}"
+                header = f"{header}{' ' * (total_width - len(header))}"
+            sys.stdout.write(f"|{header}|\n")
+            sys.stdout.write(f"+{'=' * (total_width - 2)}+\n")
+            for i, header in enumerate(rows[0]):
+                sys.stdout.write(f"|{header}{' ' * (col_widths[i] - len(header))}")
+            sys.stdout.write("|\n")
+            sys.stdout.write(f"+{'=' * (total_width - 2)}+\n")
+            for row in rows[1:]:
+                for i, col in enumerate(row):
+                    sys.stdout.write(f"|{col}{' ' * (col_widths[i] - len(col))}")
+                sys.stdout.write("|\n")
+            sys.stdout.write(f"+{'=' * (total_width - 2)}+\n")
+            return 0
 
     query = []
     if args.after:

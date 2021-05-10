@@ -64,7 +64,9 @@ class DbBackedFeed(Feed):
 
     def is_out_of_date(self) -> bool:
         last_checked = self.last_checked()
-        if last_checked is not None and time() - last_checked.timestamp() < UPDATE_INTERVAL_SECONDS:
+        if last_checked is None:
+            return True
+        elif last_checked is not None and time() - last_checked.timestamp() < UPDATE_INTERVAL_SECONDS:
             # the data in the DB is new enough:
             return False
         else:
@@ -77,7 +79,7 @@ class DbBackedFeed(Feed):
             return out_of_date
 
     def reload(self, existing_data: Optional[Data] = None, force: bool = False) -> DataSource:
-        if not force and existing_data is not None and not self.is_out_of_date():
+        if not force and existing_data is not None and len(existing_data) > 0:
             return existing_data
         with tqdm(desc=self.name, unit=" CVEs", leave=False) as t:
             if existing_data is not None:
@@ -90,18 +92,18 @@ class DbBackedFeed(Feed):
             if isinstance(new_data, Sized):
                 t.total = len(new_data)
             with self.connection as c:
-                c.execute(
-                    "UPDATE feeds SET last_checked = ? WHERE rowid = ?",
-                    (datetime.fromtimestamp(time()).astimezone().timestamp(), self.feed_id)
-                )
                 if existing_modified_time is None or new_data.last_modified_date != existing_modified_time:
+                    for cve in new_data:
+                        self.schema.add(cve, self.feed_id)
+                        t.update(1)
                     c.execute(
                         "UPDATE feeds SET last_modified = ? WHERE rowid = ?",
                         (new_data.last_modified_date.astimezone().timestamp(), self.feed_id)
                     )
-                    for cve in new_data:
-                        self.schema.add(cve, self.feed_id)
-                        t.update(1)
+                c.execute(
+                    "UPDATE feeds SET last_checked = ? WHERE rowid = ?",
+                    (datetime.fromtimestamp(time()).astimezone().timestamp(), self.feed_id)
+                )
                 c.commit()
         return CVEdbDataSource(self)
 
@@ -163,7 +165,9 @@ class CVEdbData(Data):
     def __len__(self):
         self.reload()
         c = self.connection.cursor()
-        c.execute("SELECT COUNT(*) FROM cves")
+        where_clause = " OR ".join(["feed = ?"] * len(self.feeds))
+        params = tuple(feed.feed_id for feed in self.feeds)
+        c.execute(f"SELECT COUNT(*) FROM cves WHERE {where_clause}", params)
         return c.fetchone()[0]
 
     def search(
@@ -179,10 +183,19 @@ class CVEdbData(Data):
             pass
         return super().search(*queries, sort=sort, ascending=ascending)
 
-    def reload(self):
-        out_of_date_feeds = [feed for feed in self.feeds if feed.is_out_of_date()]
+    def reload(self, force: bool = False):
+        if force:
+            out_of_date_feeds = [feed for feed in self.feeds if feed.is_out_of_date()]
+        else:
+            out_of_date_feeds = [
+                feed for feed in self.feeds if feed.last_checked() is None or feed.last_modified() is None
+            ]
         for feed in tqdm(out_of_date_feeds, desc="updating", unit=" feeds", leave=False):
-            feed.reload(feed.data(), force=True)
+            if force:
+                existing_data: Optional[Data] = feed.data()
+            else:
+                existing_data = None
+            feed.reload(existing_data, force=True)
 
 
 class CVEdb(Feed):

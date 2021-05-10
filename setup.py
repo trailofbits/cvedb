@@ -1,16 +1,17 @@
+import os
 from setuptools import setup, find_packages
-from sys import version_info
 
-extra_requires = []
+SETUP_DIR = os.path.dirname(os.path.realpath(__file__))
+README_PATH = os.path.join(SETUP_DIR, "README.md")
 
-if version_info < (3, 7):
-    # dataclasses were added in Python 3.7, so use this backport for earlier versions of Python
-    extra_requires.append("dataclasses~=0.8")
-
+with open(README_PATH, "r") as readme:
+    README = readme.read()
 
 setup(
     name="cvedb",
     description="Yet another CVE database",
+    long_description=README,
+    long_description_content_type="text/markdown",
     license="LGPL-3.0-or-later",
     url="https://github.com/trailofbits/cvedb",
     author="Trail of Bits",
@@ -18,10 +19,15 @@ setup(
     packages=find_packages(exclude=["test"]),
     python_requires=">=3.6",
     install_requires=[
-        "cvss~=2.2",
-        "python-dateutil~=2.8.1",
-        "tqdm~=4.48.0"
-    ] + extra_requires,
+        "cvss>=2.2",
+        # dataclasses were added in Python 3.7, so use this backport for earlier versions of Python
+        "dataclasses",
+        "python-dateutil>=2.8.1",
+        "tqdm>=4.48.0"
+    ],
+    package_data={
+        "cvedb": ["data/*.json.gz", "data/*.meta"]
+    },
     extras_require={
         "dev": ["flake8", "pytest", "rstr~=2.2.6", "twine"]
     },
