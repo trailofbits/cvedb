@@ -77,7 +77,7 @@ class DbBackedFeed(Feed):
             return out_of_date
 
     def reload(self, existing_data: Optional[Data] = None, force: bool = False) -> DataSource:
-        if not force and existing_data is not None and not self.is_out_of_date():
+        if not force and existing_data is not None:
             return existing_data
         with tqdm(desc=self.name, unit=" CVEs", leave=False) as t:
             if existing_data is not None:

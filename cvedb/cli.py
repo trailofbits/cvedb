@@ -3,6 +3,7 @@ from datetime import datetime
 from dateutil.parser import isoparse, ParserError
 import pkg_resources
 import sys
+from tqdm import tqdm
 from typing import List, Optional, Union
 
 from .cpe import Logical
@@ -72,6 +73,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                                                                            "feeds and exit")
 
     args = parser.parse_args(argv[1:])
+
+    if args.update:
+        with CVEdb.open(args.database) as db:
+            for feed in tqdm(db.feeds, desc="updating", leave=False, unit=" feeds"):
+                feed.reload(existing_data=feed.data(), force=True)
 
     if args.version:
         if sys.stdout.isatty():
