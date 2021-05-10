@@ -163,7 +163,9 @@ class CVEdbData(Data):
     def __len__(self):
         self.reload()
         c = self.connection.cursor()
-        c.execute("SELECT COUNT(*) FROM cves")
+        where_clause = " OR ".join(["feed = ?"] * len(self.feeds))
+        params = tuple(feed.feed_id for feed in self.feeds)
+        c.execute(f"SELECT COUNT(*) FROM cves WHERE {where_clause}", params)
         return c.fetchone()[0]
 
     def search(
