@@ -106,7 +106,7 @@ class Feed(ABC):
         return last_modified is None or int(time.time()) - last_modified.timestamp() >= MAX_DATA_AGE_SECONDS
 
     def data(self, force_reload: bool = False) -> Data:
-        if force_reload:
+        if force_reload or self._data is None:
             self._data = InMemoryData.load(self.reload(self._data))
         return self._data
 
