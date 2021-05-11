@@ -21,7 +21,7 @@ setup(
     install_requires=[
         "cvss>=2.2",
         # dataclasses were added in Python 3.7, so use this backport for earlier versions of Python
-        "dataclasses",
+        "dataclasses;python_version<'3.7'",
         "python-dateutil>=2.8.1",
         "tqdm>=4.48.0"
     ],
