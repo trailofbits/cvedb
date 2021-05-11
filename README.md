@@ -38,7 +38,7 @@ $ cvedb --help
 from cvedb.db import CVEdb
 
 with CVEdb.open() as db:
-    for cve in db:
+    for cve in db.data():
         print(cve)
 ```
 
