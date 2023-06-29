@@ -2,7 +2,7 @@
 
 [![PyPI version](https://badge.fury.io/py/cvedb.svg)](https://badge.fury.io/py/cvedb)
 [![Tests](https://github.com/trailofbits/cvedb/workflows/tests/badge.svg)](https://github.com/trailofbits/cvedb/actions)
-[![Slack Status](https://empireslacking.herokuapp.com/badge.svg)](https://empireslacking.herokuapp.com)
+[![Slack Status](https://slack.empirehacking.nyc/badge.svg)](https://slack.empirehacking.nyc)
 
 CVEdb is yet another Python CVE database library and utility. There are lots already available. Why create another?
 Most existing libraries rely on a third party API like [cve.circl.lu](https://cve.circl.lu/), which can and do
