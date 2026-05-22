@@ -1,10 +1,10 @@
 from dataclasses import dataclass
 from datetime import datetime
 from gzip import decompress
+from importlib.metadata import version as package_version
 import itertools
 import json
 from pathlib import Path
-import pkg_resources
 import sys
 from typing import Any, Dict, Iterable, Iterator, List, Optional, TextIO, Union
 import urllib.request
@@ -179,7 +179,7 @@ class JsonDataSource(DataSource):
 
 
 def download(url: str, size: Optional[int] = None, show_progress: bool = True) -> bytes:
-    cvedb_version = pkg_resources.require("cvedb")[0].version
+    cvedb_version = package_version("cvedb")
     request = urllib.request.Request(
         url=url,
         data=None,

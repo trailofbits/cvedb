@@ -1,7 +1,7 @@
 import argparse
 from datetime import datetime
 from dateutil.parser import isoparse, ParserError
-import pkg_resources
+from importlib.metadata import version as package_version
 import sys
 from typing import List, Optional, Union
 
@@ -16,7 +16,7 @@ from .search import (
 
 
 def version() -> str:
-    return pkg_resources.require("cvedb")[0].version
+    return package_version("cvedb")
 
 
 def parse_date(date_str: str) -> datetime:
