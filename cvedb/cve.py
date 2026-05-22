@@ -11,11 +11,7 @@ from cvss import CVSS2, CVSS3
 from .cpe import CPE, Testable
 
 
-if sys.version_info < (3, 9):
-    # collections.abc.Sequence didn't become subscriptable until Python 3.9
-    TestableSequence = Sequence
-else:
-    TestableSequence = Sequence[Testable]
+TestableSequence = Sequence[Testable]
 
 
 class Severity(IntEnum):
