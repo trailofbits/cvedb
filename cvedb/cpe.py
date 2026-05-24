@@ -507,11 +507,11 @@ class VersionRange(Testable):
     def dump_content(self, stream: TextIO):
         stream.write(["E", "I"][self.include_start])
         if self.start is not None:
-            stream.write(str(self.start))
+            stream.write(self.start.strip())
         stream.write("\n")
         stream.write(["E", "I"][self.include_end])
         if self.end is not None:
-            stream.write(str(self.end))
+            stream.write(self.end.strip())
         stream.write("\n")
         self.wrapped.dump(stream)
 
@@ -521,10 +521,14 @@ class VersionRange(Testable):
         start = stream.readline()
         if not start:
             start = None
+        else:
+            start = start.strip()
         include_end = stream.read(1) == "I"
         end = stream.readline()
         if not end:
             end = None
+        else:
+            end = end.strip()
         return cls(Testable.load(stream), start=start, end=end, include_start=include_start, include_end=include_end)
 
     def vulnerable_cpes(self) -> Iterator[CPE]:

@@ -7,7 +7,7 @@ from rstr import xeger
 from cvedb.cpe import (
     AV_STRING_REGEX, CPE, FormattedStringParser, LANGTAG_REGEX, Language, Logical, parse_formatted_string, Part
 )
-
+from cvedb.cve import Configurations
 
 assert AV_STRING_REGEX.pattern.endswith(".*")
 assert LANGTAG_REGEX.pattern.endswith(".*")
@@ -70,6 +70,24 @@ class TestCPE(TestCase):
         self.assertEqual(cpe.target_sw, "rust")
         self.assertEqual(cpe.target_hw, Logical.ANY)
         self.assertEqual(cpe.other, Logical.ANY)
+        
+    def test_configurations_serialization(self):
+        """Regresion test from https://nvd.nist.gov/vuln/detail/CVE-2012-1093
+
+            C1
+            o=4
+            vI
+            E1\:7.6\+12
+            ccpe:2.3:a:debian:x11-common:*:*:*:*:*:*:*:*
+            ccpe:2.3:o:debian:debian_linux:8.0:*:*:*:*:*:*:*
+            ccpe:2.3:o:debian:debian_linux:9.0:*:*:*:*:*:*:*
+            ccpe:2.3:o:debian:debian_linux:10.0:*:*:*:*:*:*:*
+
+        """
+        raw = 'C1\no=4\nvI\nE1\\:7.6\\+12\nccpe:2.3:a:debian:x11-common:*:*:*:*:*:*:*:*\nccpe:2.3:o:debian:debian_linux:8.0:*:*:*:*:*:*:*\nccpe:2.3:o:debian:debian_linux:9.0:*:*:*:*:*:*:*\nccpe:2.3:o:debian:debian_linux:10.0:*:*:*:*:*:*:*\n'
+        cfg = Configurations.loads(raw)
+        self.assertEqual(cfg.dumps(), raw)
+        self.assertEqual(cfg, Configurations.loads(cfg.dumps()))
 
     def test_serialization(self):
         for i in range(100):
