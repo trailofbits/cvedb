@@ -125,9 +125,30 @@ class Feed(ABC):
             or int(time.time()) - last_modified.timestamp() >= MAX_DATA_AGE_SECONDS
         )
 
+    def _load_initial(self) -> DataSource | None:
+        if self._data is not None:
+            return self._data
+        source = self.reload(None)
+        if not isinstance(source, DataSource):
+            raise TypeError(
+                f"Cannot initialize feed {self.name!r}: reload must return a DataSource"
+            )
+        return source
+
     def data(self, force_reload: bool = False) -> Data:
+        """Return cached initial data or explicitly refresh when force_reload is True.
+
+        Built-in NVD feeds initialize from installed snapshots only. An absent
+        snapshot is cached as empty data with an unknown last-modified date.
+        Custom feeds initialize through their reload implementation by default.
+        """
         if force_reload or self._data is None:
-            self._data = InMemoryData.load(self.reload(self._data))
+            source = self.reload(self._data) if force_reload else self._load_initial()
+            if force_reload and not isinstance(source, DataSource):
+                raise TypeError(
+                    f"Cannot reload feed {self.name!r}: upstream must return a DataSource"
+                )
+            self._data = InMemoryData(None, ()) if source is None else InMemoryData.load(source)
         return self._data
 
     @abstractmethod

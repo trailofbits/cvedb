@@ -15,6 +15,7 @@ from tqdm import tqdm
 
 from cvedb.cpe import And, CPEMatch, Or, Testable, VersionRange, parse_formatted_string
 from cvedb.cve import CVE, Configurations, Description, Reference
+from cvedb.dates import utc_datetime
 from cvedb.feed import Data, DataSource, Feed
 
 _VERSION_BOUND_FIELDS = (
@@ -381,24 +382,29 @@ class JsonFeed(Feed):
         self.cached_meta_path: Path = PRE_SEED_DATA_DIR / f"nvdcve-1.1-{self.name}.meta"
         self.cached_json_path: Path = PRE_SEED_DATA_DIR / f"nvdcve-1.1-{self.name}.json.gz"
 
+    def _load_initial(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+        self,
+    ) -> DataSource | None:
+        if self._data is not None:
+            return self._data
+        if not self.cached_json_path.exists() or not self.cached_meta_path.exists():
+            return None
+        with self.cached_meta_path.open("r") as meta:
+            with self.cached_json_path.open("rb") as compressed_json:
+                return JsonDataSource.load(
+                    json.loads(decompress(compressed_json.read())), Meta.load(meta)
+                )
+
     def reload(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
         self, existing_data: Optional[Data] = None
     ) -> DataSource:
-        if existing_data is None or len(existing_data) == 0:
-            # Use the bundled feed for the first load when it is available.
-            if self.cached_json_path.exists() and self.cached_meta_path.exists():
-                with open(self.cached_meta_path, "r") as meta:
-                    with open(self.cached_json_path, "rb") as compressed_json:
-                        return JsonDataSource.load(
-                            json.loads(decompress(compressed_json.read())), Meta.load(meta)
-                        )
         with urllib.request.urlopen(self.meta_url) as req:
             new_meta = Meta.load(req)
         last_modified = None if existing_data is None else existing_data.last_modified_date
         if (
             existing_data is not None
             and last_modified is not None
-            and new_meta.last_modified_date <= last_modified
+            and utc_datetime(new_meta.last_modified_date) <= utc_datetime(last_modified)
         ):
             # the existing data is newer
             return existing_data

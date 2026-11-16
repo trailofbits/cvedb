@@ -1,259 +1,369 @@
+"""Database-backed views, explicit refreshes, and owned SQLite contexts."""
+
+from collections.abc import Generator, Iterable, Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
-import itertools
 from pathlib import Path
 from sqlite3 import connect, Connection
+import sys
 from time import time
-from typing import Iterable, Iterator, List, Optional, Sized, Union
+from types import TracebackType
 
 from tqdm import tqdm
 
 from cvedb.cve import CVE
+from cvedb.dates import utc_datetime
 from cvedb.feed import Data, DataSource, Feed, FEEDS, MAX_DATA_AGE_SECONDS
 from cvedb.schemas import Schema, UnsupportedQueryError
 from cvedb.search import SearchQuery, Sort
 
 DEFAULT_DB_PATH = Path.home() / ".config" / "cvedb" / "cvedb.sqlite"
-
 UPDATE_INTERVAL_SECONDS: int = MAX_DATA_AGE_SECONDS
 
 
-class CVEdbDataSource(DataSource):
-    def __init__(self, source: Union["DbBackedFeed", "CVEdb"]):
+@contextmanager
+def _savepoint(connection: Connection, name: str) -> Generator[None, None, None]:
+    connection.execute(f"SAVEPOINT {name}")
+    try:
+        yield
+        connection.execute(f"RELEASE {name}")
+    except BaseException:
+        if connection.in_transaction:
+            connection.execute(f"ROLLBACK TO {name}")
+            connection.execute(f"RELEASE {name}")
+        raise
+
+
+class CVEdbDataSource(Data):
+    """A non-owning view of persisted records that never initializes or updates feeds.
+
+    The timestamp describes persisted data when the view is created; it is None
+    when no source timestamp is known. Use this view while its connection is open.
+    """
+
+    def __init__(self, source: "DbBackedFeed | CVEdb") -> None:
         super().__init__(source.last_modified())
-        self.connection: Connection = source.connection
-        if isinstance(source, CVEdb):
-            self.feeds: List[DbBackedFeed] = source.feeds
-        else:
-            self.feeds = [source]
+        self._source = source
+        self.connection = source.connection
+        self.schema = source.schema
+        self.feeds = source.feeds if isinstance(source, CVEdb) else [source]
 
     def __iter__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
         self,
     ) -> Iterator[CVE]:
-        c = self.connection.cursor()
-        where_clause = " OR ".join(["feed = ?"] * len(self.feeds))
-        params = tuple(feed.feed_id for feed in self.feeds)
-        c.execute(f"SELECT * FROM cves WHERE {where_clause}", params)
-        # The following assumes that all feeds have the same schema, which should always be true
-        yield from self.feeds[0].schema.cve_iter(c.fetchall())
+        if not self.feeds:
+            return
+        placeholders = ", ".join("?" for _ in self.feeds)
+        rows = self.connection.execute(
+            f"SELECT * FROM cves WHERE feed IN ({placeholders})",
+            tuple(feed.feed_id for feed in self.feeds),
+        )
+        try:
+            yield from self.schema.cve_iter(rows)
+        finally:
+            rows.close()
+
+    def __len__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+        self,
+    ) -> int:
+        if not self.feeds:
+            return 0
+        placeholders = ", ".join("?" for _ in self.feeds)
+        row = self.connection.execute(
+            f"SELECT COUNT(*) FROM cves WHERE feed IN ({placeholders})",
+            tuple(feed.feed_id for feed in self.feeds),
+        ).fetchone()
+        return int(row[0])
 
 
 class DbBackedFeed(Feed):
     register = False
 
-    def __init__(self, connection: Connection, parent: Feed):
+    def __init__(
+        self, connection: Connection, parent: Feed, *, schema: Schema | None = None
+    ) -> None:
         super().__init__(parent.name)
-        self.parent: Feed = parent
-        self.connection: Connection = connection
-        with self.connection:
-            self.schema: Schema = Schema.open(self.connection)
-            self.feed_id: int = self.schema.feed_id(self.parent.name)
+        self.parent = parent
+        self.connection = connection
+        self.schema = Schema.open(connection) if schema is None else schema
+        self.feed_id = self.schema.feed_id(parent.name)
+        self._initial_loaded = False
 
     def last_modified(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
         self,
-    ) -> Optional[datetime]:
-        c = self.connection.cursor()
-        c.execute("SELECT last_modified FROM feeds WHERE rowid = ?", (self.feed_id,))
-        row = c.fetchone()
-        if row is None or row[0] is None:
-            return None
-        return datetime.fromtimestamp(row[0], timezone.utc)
+    ) -> datetime | None:
+        return self._date("last_modified")
 
-    def last_checked(self) -> Optional[datetime]:
-        c = self.connection.cursor()
-        c.execute("SELECT last_checked FROM feeds WHERE rowid = ?", (self.feed_id,))
-        row = c.fetchone()
-        if row is None or row[0] is None:
-            return None
-        return datetime.fromtimestamp(row[0], timezone.utc)
+    def last_checked(self) -> datetime | None:
+        """Return the last successful explicit upstream check, or None."""
+        return self._date("last_checked")
+
+    def _date(self, column: str) -> datetime | None:
+        row = self.connection.execute(
+            f"SELECT {column} FROM feeds WHERE id = ?", (self.feed_id,)
+        ).fetchone()
+        return (
+            None if row is None or row[0] is None else datetime.fromtimestamp(row[0], timezone.utc)
+        )
 
     def is_out_of_date(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
         self,
     ) -> bool:
-        last_checked = self.last_checked()
-        if last_checked is None:
-            return True
-        elif time() - last_checked.timestamp() < UPDATE_INTERVAL_SECONDS:
-            # the data in the DB is new enough:
-            return False
-        else:
-            out_of_date = super().is_out_of_date()
-            with self.connection as c:
-                c.execute(
-                    "UPDATE feeds SET last_checked = ? WHERE rowid = ?",
-                    (datetime.fromtimestamp(time()).astimezone().timestamp(), self.feed_id),
+        """Read whether another upstream check is due without changing metadata."""
+        checked = self.last_checked()
+        return checked is None or time() - checked.timestamp() >= UPDATE_INTERVAL_SECONDS
+
+    def _load_initial(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+        self,
+    ) -> CVEdbDataSource:
+        if not self._initial_loaded:
+            has_records = self.connection.execute(
+                "SELECT 1 FROM cves WHERE feed=? LIMIT 1", (self.feed_id,)
+            ).fetchone()
+            known = self.last_modified() is not None or self.last_checked() is not None
+            if not known and has_records is None:
+                source = self.parent._load_initial()
+                if source is not None:
+                    self._persist(source)
+            self._initial_loaded = True
+        return CVEdbDataSource(self)
+
+    def _persist(self, source: DataSource) -> None:
+        modified = source.last_modified_date
+        with _savepoint(self.connection, "cvedb_feed_records"):
+            with tqdm(
+                desc=self.name, unit=" CVEs", leave=False, disable=not sys.stderr.isatty()
+            ) as t:
+                for cve in source:
+                    if modified is None:
+                        raise ValueError(
+                            f"Cannot initialize feed {self.name!r}: records need a timestamp"
+                        )
+                    self.schema.add(cve, self.feed_id)
+                    t.update(1)
+            if modified is not None:
+                self.connection.execute(
+                    "UPDATE feeds SET last_modified=? WHERE id=?",
+                    (utc_datetime(modified).timestamp(), self.feed_id),
                 )
-            return out_of_date
+
+    def _mark_checked(self, checked_at: float) -> None:
+        self.connection.execute(
+            "UPDATE feeds SET last_checked=? WHERE id=?", (checked_at, self.feed_id)
+        )
 
     def reload(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
-        self, existing_data: Optional[Data] = None, force: bool = False
-    ) -> DataSource:
-        if not force and existing_data is not None and len(existing_data) > 0:
-            return existing_data
-        with tqdm(desc=self.name, unit=" CVEs", leave=False) as t:
-            if existing_data is not None:
-                existing_modified_time = existing_data.last_modified_date
-            else:
-                existing_modified_time = None
-            new_data = self.parent.reload(existing_data)
-            if new_data is existing_data:
-                return new_data
-            modified = new_data.last_modified_date
-            if modified is None:
-                raise ValueError(
-                    f"Cannot reload feed {self.name!r}: the upstream source has no last-modified "
-                    "timestamp; provide a timestamp before retrying"
-                )
-            if isinstance(new_data, Sized):
-                t.total = len(new_data)
-            with self.connection as c:
-                if existing_modified_time is None or modified != existing_modified_time:
-                    for cve in new_data:
-                        self.schema.add(cve, self.feed_id)
-                        t.update(1)
-                    c.execute(
-                        "UPDATE feeds SET last_modified = ? WHERE rowid = ?",
-                        (modified.timestamp(), self.feed_id),
-                    )
-                c.execute(
-                    "UPDATE feeds SET last_checked = ? WHERE rowid = ?",
-                    (datetime.fromtimestamp(time()).astimezone().timestamp(), self.feed_id),
-                )
-                c.commit()
+        self, existing_data: Data | None = None, force: bool = False
+    ) -> CVEdbDataSource:
+        """Refresh upstream data when due, or unconditionally when force is True.
+
+        Persisted records are the authoritative existing-data view. A genuinely
+        new source is ingested even if its timestamp is unchanged. Returning the
+        existing-data object explicitly confirms an unchanged upstream response.
+
+        Raises:
+            TypeError: The upstream feed does not return a data source.
+            ValueError: A new upstream source has no last-modified timestamp.
+        """
+        if not force and not self.is_out_of_date():
+            return CVEdbDataSource(self)
+        existing_data = None if self.last_modified() is None else CVEdbDataSource(self)
+        source = self.parent.reload(existing_data)
+        if not isinstance(source, DataSource):
+            raise TypeError(f"Cannot reload feed {self.name!r}: upstream must return a DataSource")
+        unchanged = existing_data is not None and source is existing_data
+        if not unchanged and source.last_modified_date is None:
+            raise ValueError(
+                f"Cannot reload feed {self.name!r}: the upstream source has no last-modified "
+                "timestamp; provide a timestamp before retrying"
+            )
+        with _savepoint(self.connection, "cvedb_feed_update"):
+            if not unchanged:
+                self._persist(source)
+            self._mark_checked(time())
         return CVEdbDataSource(self)
 
     def data(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
         self, force_reload: bool = False
     ) -> "CVEdbData":
+        """Return a lazy persisted view; force_reload explicitly refreshes upstream."""
         if force_reload:
-            self.reload()
+            self.reload(force=True)
         return CVEdbData(self)
 
 
 class CVEdbContext:
-    def __init__(self, db_path: Union[str, Path], parents: Optional[Iterable[Feed]] = None):
-        if not isinstance(db_path, Path):
-            db_path = Path(str(db_path))
-        self.db_path: Path = db_path
-        self.parents: Optional[Iterable[Feed]] = parents
-        self._connection: Optional[Connection] = None
-        self._db: Optional[CVEdb] = None
-        self._entries: int = 0
+    """Own one connection and transaction across nested entries.
+
+    Any nested exception makes the whole outer transaction rollback-only, even
+    if the caller catches that exception before the outer context exits.
+    """
+
+    def __init__(self, db_path: str | Path, parents: Iterable[Feed] | None = None) -> None:
+        self.db_path = Path(db_path)
+        self.parents = None if parents is None else tuple(parents)
+        self._connection: Connection | None = None
+        self._db: CVEdb | None = None
+        self._entries = 0
+        self._rollback_only = False
 
     def __enter__(self) -> "CVEdb":
-        self._entries += 1
         if self._db is not None:
-            assert self._connection is not None
-            assert self._entries > 1
+            self._entries += 1
             return self._db
-        db_dir = self.db_path.parent
-        if not db_dir.exists():
-            db_dir.mkdir(parents=True, exist_ok=True)
-        self._connection = connect(str(self.db_path))
-        self._connection.__enter__()
-        return CVEdb(self._connection, self.parents)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        connection = connect(str(self.db_path))
+        try:
+            connection.execute("PRAGMA foreign_keys = ON")
+            connection.execute("BEGIN")
+            database = CVEdb(connection, self.parents)
+        except BaseException:
+            try:
+                connection.close()
+            finally:
+                self._reset()
+            raise
+        self._connection = connection
+        self._db = database
+        self._entries = 1
+        return database
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        connection = self._connection
+        if connection is None or self._entries == 0:
+            raise RuntimeError("Cannot exit a CVEdb context that has not been entered")
+        self._rollback_only = self._rollback_only or exc_type is not None
         self._entries -= 1
-        if self._entries == 0:
-            assert self._connection is not None
-            self._connection.__exit__(exc_type, exc_val, exc_tb)
-            self._connection = None
-            self._db = None
+        if self._entries:
+            return
+        try:
+            if self._rollback_only:
+                connection.rollback()
+            else:
+                try:
+                    connection.commit()
+                except BaseException:
+                    connection.rollback()
+                    raise
+        finally:
+            try:
+                connection.close()
+            finally:
+                self._reset()
+
+    def _reset(self) -> None:
+        self._connection = None
+        self._db = None
+        self._entries = 0
+        self._rollback_only = False
 
 
-class CVEdbData(Data):
-    def __init__(self, source: Union["CVEdb", DbBackedFeed]):
-        super().__init__(source.last_modified())
-        self.connection: Connection = source.connection
-        if isinstance(source, CVEdb):
-            self.feeds: List[DbBackedFeed] = source.feeds
-        else:
-            self.feeds = [source]
+class CVEdbData(CVEdbDataSource):
+    """A persisted view that initializes local data lazily and uses SQL searches."""
 
-    @property
-    def schema(self) -> Schema:
-        # The following assumes that all feeds have the same schema, which should always be true
-        return self.feeds[0].schema
+    def _ensure_initial(self) -> None:
+        self.last_modified_date = self._source._load_initial().last_modified_date
 
     def __iter__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
         self,
     ) -> Iterator[CVE]:
-        self.reload()
-        return itertools.chain(*(iter(CVEdbDataSource(feed)) for feed in self.feeds))
+        self._ensure_initial()
+        return super().__iter__()
 
     def __len__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
         self,
-    ):
-        self.reload()
-        c = self.connection.cursor()
-        where_clause = " OR ".join(["feed = ?"] * len(self.feeds))
-        params = tuple(feed.feed_id for feed in self.feeds)
-        c.execute(f"SELECT COUNT(*) FROM cves WHERE {where_clause}", params)
-        return int(c.fetchone()[0])
+    ) -> int:
+        self._ensure_initial()
+        return super().__len__()
 
     def search(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
         self,
-        *queries: Union[str, SearchQuery],
+        *queries: str | SearchQuery,
         sort: Iterable[Sort] = (Sort.CVE_ID,),
         ascending: bool = True,
     ) -> Iterator[CVE]:
-        self.reload()
+        """Prepare SQL eagerly, retaining lazy results and custom-query fallback."""
+        self._ensure_initial()
+        if not self.feeds:
+            return iter(())
         sorts = tuple(sort)
         try:
             return self.schema.search(*queries, sort=sorts, ascending=ascending, db_data=self)
         except UnsupportedQueryError:
             return super().search(*queries, sort=sorts, ascending=ascending)
 
-    def reload(self, force: bool = False):
-        if force:
-            out_of_date_feeds = [feed for feed in self.feeds if feed.is_out_of_date()]
-        else:
-            out_of_date_feeds = [
-                feed
-                for feed in self.feeds
-                if feed.last_checked() is None or feed.last_modified() is None
-            ]
-        with tqdm(
-            total=len(out_of_date_feeds), desc="updating", unit=" feeds", leave=False
-        ) as progress:
-            for feed in out_of_date_feeds:
-                existing_data: Data | None = feed.data() if force else None
-                feed.reload(existing_data, force=True)
-                progress.update(1)
+    def reload(self, force: bool = False) -> CVEdbDataSource:
+        """Explicitly check upstream feeds and refresh this view's timestamp."""
+        source = self._source.reload(force=force)
+        self.last_modified_date = source.last_modified_date
+        return source
 
 
 class CVEdb(Feed):
     register = False
 
-    def __init__(self, connection: Connection, parents: Optional[Iterable[Feed]] = None):
+    def __init__(self, connection: Connection, parents: Iterable[Feed] | None = None) -> None:
         super().__init__("cves")
-        if parents is None:
-            parents = FEEDS.values()
-        self.feeds: List[DbBackedFeed] = [DbBackedFeed(connection, parent) for parent in parents]
-        self.connection: Connection = connection
+        self.connection = connection
+        self.schema = Schema.open(connection)
+        parents = FEEDS.values() if parents is None else parents
+        self.feeds = [DbBackedFeed(connection, parent, schema=self.schema) for parent in parents]
 
     def last_modified(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
         self,
-    ) -> Optional[datetime]:
-        newest = None
-        for parent in self.feeds:
-            parent_modified = parent.last_modified()
-            if parent_modified is not None and (newest is None or parent_modified > newest):
-                newest = parent_modified
-        return newest
+    ) -> datetime | None:
+        """Return the newest known persisted feed timestamp, or None."""
+        dates = [feed.last_modified() for feed in self.feeds]
+        return max((value for value in dates if value is not None), default=None)
+
+    def _load_initial(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+        self,
+    ) -> CVEdbDataSource:
+        for feed in self.feeds:
+            feed._load_initial()
+        return CVEdbDataSource(self)
 
     def data(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
         self, force_reload: bool = False
     ) -> CVEdbData:
+        """Return a lazy local view; force_reload explicitly checks every upstream feed."""
+        if force_reload:
+            self.reload(force=True)
         return CVEdbData(self)
 
     def reload(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
-        self, existing_data: Optional[Data] = None, force: bool = False
+        self, existing_data: Data | None = None, force: bool = False
     ) -> CVEdbDataSource:
+        """Atomically refresh due feeds, bypassing throttling when force is True.
+
+        This explicit update may use the network. Ordinary data views initialize
+        installed data without checking built-in NVD feeds upstream. The return
+        value is a non-owning persisted view, valid while this connection is open.
+        A surrounding transaction retains ownership of commit or rollback.
+        """
+        feeds = [feed for feed in self.feeds if force or feed.is_out_of_date()]
+        if feeds:
+            with _savepoint(self.connection, "cvedb_database_update"):
+                with tqdm(
+                    total=len(feeds),
+                    desc="updating",
+                    unit=" feeds",
+                    leave=False,
+                    disable=not sys.stderr.isatty(),
+                ) as progress:
+                    for feed in feeds:
+                        feed.reload(force=force)
+                        progress.update(1)
         return CVEdbDataSource(self)
 
     @staticmethod
     def open(
-        db_path: Union[str, Path] = DEFAULT_DB_PATH, parents: Optional[Iterable[Feed]] = None
+        db_path: str | Path = DEFAULT_DB_PATH, parents: Iterable[Feed] | None = None
     ) -> CVEdbContext:
+        """Open an owned connection whose outermost context commits or rolls back and closes."""
         return CVEdbContext(db_path, parents)

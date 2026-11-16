@@ -67,7 +67,7 @@ def test_bundled_legacy_feed_loads_without_network() -> None:
     with patch(
         "cvedb.nvd.urllib.request.urlopen", side_effect=AssertionError("Unexpected network")
     ):
-        source = FEEDS["2002"].reload()
+        source = FEEDS["2002"].data()
     assert len(list(source)) > 0
 
 

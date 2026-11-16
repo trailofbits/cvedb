@@ -56,16 +56,13 @@ with CVEdb.open() as db:
 In addition to accepting strings, the `data().search(...)` function will accept any
 [`cvedb.search.SearchQuery` object](https://github.com/trailofbits/cvedb/blob/master/cvedb/search.py).
 
-## Known Issues
+## Feed sources
 
-The NIST National Vulnerability Database is in the process of transitioning to a new REST API. The datasets on which
-CVEdb is built are still available, but it is unclear whether they may become deprecated. Also, NIST has started rate
-limiting downloads, which may affect CVEdb syncing. Therefore, CVEdb ships
-[pre-seeded with a database](https://github.com/trailofbits/cvedb/tree/master/cvedb/data). Therefore, CVEdb does not
-require any Internet connectivity after it is installed, other than to download new CVE definitions. Also, the behavior
-of CVEdb was changed from automatically checking for updates as necessary to now requiring the user explicitly request
-an update with the new `--update` argument. Support for the new REST API is being tracked in
-[this GitHub issue](https://github.com/trailofbits/cvedb/issues/3).
+CVEdb downloads NVD 2.0 yearly feeds and reads the installed legacy snapshots for
+offline use. Ordinary queries use installed or previously persisted data. Years
+without an installed snapshot remain empty until you explicitly request an update.
+Installed snapshots have limited coverage and do not represent current NVD data.
+A paginated REST API client remains tracked in [issue #3](https://github.com/trailofbits/cvedb/issues/3).
 
 ## License and Acknowledgements
 
@@ -199,3 +196,46 @@ CPE and environment searches use conservative SQL candidate selection and then
 evaluate complete persisted configurations. They may scan many records. Custom
 query classes use in-memory filtering and ordering; matching and database errors
 propagate instead of silently changing the query.
+
+## Updates and database contexts
+
+Use `db.reload()` to explicitly check upstream feeds. By default, checks are
+limited to once per day after a successful upstream response. Use
+`db.reload(force=True)` or `data(force_reload=True)` to bypass that interval.
+Forcing a check still honors an upstream response confirming that data has not
+changed. The CLI's `--update` option requests a forced check.
+
+```python
+from cvedb.db import CVEdb
+
+with CVEdb.open() as db:
+    updated = db.reload(force=True)
+    for cve in updated:
+        print(cve)
+```
+
+The returned data source reads persisted records without downloading or
+initializing feeds. It uses the open database connection and records the newest
+known feed timestamp when created; the timestamp is `None` when unknown. Use the
+source within the connection's lifetime. A `db.data()` view refreshes its own
+timestamp after initialization or its own `reload()` call.
+
+`last_checked()` records successful explicit upstream checks. Local snapshot
+initialization leaves it unset. A new source's records are ingested even when
+its timestamp matches the previous source. Only returning the existing-data
+object confirms unchanged data. A failed refresh rolls back the records and
+metadata changed by that call. Failed due checks remain retryable, and forced
+checks can always be retried immediately. Errors propagate to the caller.
+
+The context returned by `CVEdb.open()` owns one connection and transaction.
+Nested entries reuse that database and connection. Any exception leaving a nested
+entry makes the entire outer transaction roll back, even if you catch the inner
+exception. All writes in that outer transaction are then discarded. The outermost
+exit commits or rolls back, closes the connection, and releases its state. You
+can reuse the context afterward; each outer entry opens a new connection.
+
+When you construct `CVEdb` with your own SQLite connection, you retain ownership
+of that connection and any surrounding transaction. Refresh savepoints preserve
+that transaction instead of committing it. Pass `parents=[]` for an empty feed
+collection: counting, iteration, searching, and explicit refresh return empty
+results without downloading data.
