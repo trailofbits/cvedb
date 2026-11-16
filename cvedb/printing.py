@@ -92,7 +92,7 @@ def _wrap_text(text: str, width: int, prefix: str, hang_indent: str) -> Iterator
     yield line
 
 
-def _print_box_row(
+def _print_box_row(  # noqa: PLR0913 - Four positional parameters; styling is keyword-only.
     stream: TextIO,
     columns: int,
     text: str,

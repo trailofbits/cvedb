@@ -3,7 +3,7 @@
 from collections.abc import Generator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import replace
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 import sqlite3
 from typing import cast
 
@@ -32,7 +32,7 @@ from cvedb.search import (
     TermQuery,
 )
 
-NOW = datetime(2020, 1, 2, 12, 30, 0, 500000, tzinfo=timezone.utc)
+NOW = datetime(2020, 1, 2, 12, 30, 0, 500000, tzinfo=UTC)
 
 
 def _record(number: int = 1, /, **changes: object) -> CVE:
@@ -46,7 +46,7 @@ class _FixtureFeed(Feed):
     def __init__(self, records: tuple[CVE, ...], name: str = "search") -> None:
         super().__init__(name, InMemoryData(NOW, records))
 
-    def reload(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def reload(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, existing_data: Data | None = None
     ) -> DataSource:
         assert self._data is not None
@@ -153,14 +153,14 @@ def test_ranges_negation_and_environment_queries_keep_configuration_semantics() 
 
 
 class _CustomQuery(SearchQuery):
-    def matches(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def matches(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, cve: CVE
     ) -> bool:
         return cve.cve_id.endswith("1")
 
 
 class _CustomTerm(TermQuery):
-    def matches(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def matches(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, cve: CVE
     ) -> bool:
         return True
@@ -188,7 +188,7 @@ def test_unsupported_query_is_selected_before_returning_the_iterator() -> None:
 
 def test_genuine_matcher_errors_propagate_from_iteration() -> None:
     class InvalidQuery(SearchQuery):
-        def matches(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+        def matches(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
             self, cve: CVE
         ) -> bool:
             raise ValueError("genuine matcher failure")
@@ -203,7 +203,7 @@ def test_search_keeps_matcher_execution_lazy() -> None:
     calls: list[str] = []
 
     class CountedQuery(TermQuery):
-        def matches(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+        def matches(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
             self, cve: CVE
         ) -> bool:
             calls.append(cve.cve_id)
@@ -248,7 +248,7 @@ def test_date_boundaries_are_inclusive_utc_instants(
 
 
 def test_fractional_and_negative_timestamps_are_not_truncated() -> None:
-    for when in (NOW, datetime(1969, 12, 31, 23, 59, 59, 500000, tzinfo=timezone.utc)):
+    for when in (NOW, datetime(1969, 12, 31, 23, 59, 59, 500000, tzinfo=UTC)):
         record = _record(published_date=when, last_modified_date=when)
         for query in (BeforePublishedDateQuery(when), AfterModifiedDateQuery(when)):
             _assert_parity((record,), query, [record])
@@ -343,7 +343,7 @@ def test_corrupt_record_errors_are_deferred_and_not_retried_as_fallback() -> Non
 
 def test_custom_compound_subclass_uses_its_override_in_fallback() -> None:
     class CustomAnd(AndQuery):
-        def matches(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+        def matches(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
             self, cve: CVE
         ) -> bool:
             return True
@@ -354,7 +354,7 @@ def test_custom_compound_subclass_uses_its_override_in_fallback() -> None:
 
 def test_custom_date_subclass_uses_its_override_in_fallback() -> None:
     class CustomBefore(BeforePublishedDateQuery):
-        def matches(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+        def matches(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
             self, cve: CVE
         ) -> bool:
             return True
@@ -472,7 +472,7 @@ def test_contains_registration_checks_exact_function_name_and_arity() -> None:
 
 
 class _NoFunctionListConnection(sqlite3.Connection):
-    def execute(  # ty: ignore[missing-override-decorator]  # Python 3.10 lacks override.
+    def execute(  # ty: ignore[missing-override-decorator]  # Python 3.11 lacks override.
         self, sql: str, parameters: object = ()
     ) -> sqlite3.Cursor:
         if sql == "PRAGMA function_list":
@@ -480,7 +480,7 @@ class _NoFunctionListConnection(sqlite3.Connection):
         values = cast(Sequence[object] | Mapping[str, object], parameters)
         return super().execute(sql, values)
 
-    def create_function(  # ty: ignore[missing-override-decorator]  # Python 3.10 lacks override.
+    def create_function(  # ty: ignore[missing-override-decorator]  # Python 3.11 lacks override.
         self, name: str, narg: int, func: object, *, deterministic: bool = False
     ) -> None:
         raise AssertionError("Cannot register search functions without introspection")
@@ -514,7 +514,7 @@ def test_missing_function_introspection_uses_eager_memory_fallback() -> None:
 class _FunctionSetupFailureConnection(sqlite3.Connection):
     fail_introspection = False
 
-    def execute(  # ty: ignore[missing-override-decorator]  # Python 3.10 lacks override.
+    def execute(  # ty: ignore[missing-override-decorator]  # Python 3.11 lacks override.
         self, sql: str, parameters: object = ()
     ) -> sqlite3.Cursor:
         if self.fail_introspection and sql == "PRAGMA function_list":
@@ -522,7 +522,7 @@ class _FunctionSetupFailureConnection(sqlite3.Connection):
         values = cast(Sequence[object] | Mapping[str, object], parameters)
         return super().execute(sql, values)
 
-    def create_function(  # ty: ignore[missing-override-decorator]  # Python 3.10 lacks override.
+    def create_function(  # ty: ignore[missing-override-decorator]  # Python 3.11 lacks override.
         self, name: str, narg: int, func: object, *, deterministic: bool = False
     ) -> None:
         raise sqlite3.OperationalError("function registration failure")

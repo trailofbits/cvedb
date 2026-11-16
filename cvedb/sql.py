@@ -20,7 +20,7 @@ class Query(ABC):
 
 
 class TrueQuery(Query):
-    def to_sql(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def to_sql(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> str:
         return "1"
@@ -33,12 +33,12 @@ class SimpleQuery(Query):
     def __init__(self, query: str) -> None:
         self.query = query
 
-    def to_sql(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def to_sql(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> str:
         return self.query
 
-    def __repr__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def __repr__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> str:
         return f"{self.__class__.__name__}(query={self.query!r})"
@@ -63,7 +63,7 @@ class CompoundQuery(Query):
             return queries[0]
         return cls(*queries)
 
-    def traverse(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def traverse(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> Iterator[Query]:
         yield self
@@ -92,7 +92,7 @@ class CompoundQuery(Query):
                 return
         raise ValueError(f"Query {query} is not a member of {self}")
 
-    def to_sql(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def to_sql(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> str:
         if not self.queries:
@@ -129,7 +129,7 @@ class Select:
             statement = f"{statement} LIMIT {self.limit}"
         return statement
 
-    def __str__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def __str__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> str:
         return self.to_sql()

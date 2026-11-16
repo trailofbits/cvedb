@@ -1,9 +1,71 @@
+[build-system]
+requires = ["uv_build==0.13.7"]
+build-backend = "uv_build"
+
+[project]
+name = "cvedb"
+version = "0.0.5"
+description = "Yet another CVE database"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "LGPL-3.0-or-later"
+license-files = ["LICENSE"]
+authors = [{ name = "Trail of Bits" }]
+dependencies = ["cvss==3.6", "python-dateutil==4.0.0", "tqdm==4.70.1"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
+    "Topic :: Utilities",
+]
+
+[project.urls]
+Repository = "https://github.com/trailofbits/cvedb"
+Issues = "https://github.com/trailofbits/cvedb/issues"
+
+[project.scripts]
+cvedb = "cvedb.__main__:main"
+
+[dependency-groups]
+dev = [
+    "actionlint-py==1.7.12.25",
+    "hypothesis==6.170.15",
+    "pip-audit==2.10.1",
+    "prek==0.5.10",
+    "pytest==9.2.0",
+    "rstr==3.2.2",
+    "ruff==0.17.4",
+    "shellcheck-py==0.11.0.1",
+    "shfmt-py==4.2.0",
+    "twine==7.0.0",
+    "ty==0.0.100",
+    "zizmor==1.32.0",
+]
+
+[tool.uv]
+exclude-newer = "1 week"
+
+[tool.uv.build-backend]
+module-root = ""
+source-include = [
+    "test/**", "scripts/**", "docs/**", "AGENTS.md", "CODEOWNERS", "uv.lock", ".github/**",
+    ".pre-commit-config.yaml", ".gitignore",
+]
+source-exclude = ["**/__pycache__", "**/*.pyc", "**/*.pyo"]
+wheel-exclude = ["cvedb/data/download.sh"]
+
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py311"
 
 [tool.ruff.lint]
-select = ["E4", "E7", "E9", "E501", "F", "C90", "PLR0911", "PLR0912", "PLR0913"]
+select = ["E4", "E7", "E9", "E501", "F", "UP", "C90", "PLR0911", "PLR0912", "PLR0913"]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 8
@@ -14,7 +76,7 @@ max-returns = 6
 max-args = 5
 
 [tool.ty.environment]
-python-version = "3.10"
+python-version = "3.11"
 
 [tool.ty.rules]
 all = "error"

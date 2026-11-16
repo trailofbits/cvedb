@@ -2,7 +2,7 @@ from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import IntEnum
-from typing import Optional, overload, TextIO, Tuple, Union
+from typing import overload, TextIO
 
 from cvss import CVSS2, CVSS3
 
@@ -23,8 +23,8 @@ class Severity(IntEnum):
 
 @dataclass(unsafe_hash=True, order=True, frozen=True)
 class Reference:
-    url: Optional[str] = None
-    name: Optional[str] = None
+    url: str | None = None
+    name: str | None = None
 
 
 @dataclass(unsafe_hash=True, order=True, frozen=True)
@@ -37,7 +37,7 @@ class Configurations(TestableSequence, Testable):
     uid = "C"
 
     def __init__(self, testable: Iterable[Testable]):
-        self.testable: Tuple[Testable, ...] = tuple(testable)
+        self.testable: tuple[Testable, ...] = tuple(testable)
 
     @overload
     def __getitem__(self, i: int) -> Testable: ...
@@ -45,27 +45,27 @@ class Configurations(TestableSequence, Testable):
     @overload
     def __getitem__(self, i: slice) -> TestableSequence: ...
 
-    def __getitem__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def __getitem__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, i: int | slice
     ) -> Testable | TestableSequence:
         return self.testable[i]
 
-    def __len__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def __len__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> int:
         return len(self.testable)
 
-    def __eq__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def __eq__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, other: object
     ) -> bool:
         return isinstance(other, Configurations) and self.testable == other.testable
 
-    def __hash__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def __hash__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> int:
         return hash(self.testable)
 
-    def dump_content(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def dump_content(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, stream: TextIO
     ) -> None:
         stream.write(str(len(self)))
@@ -74,19 +74,19 @@ class Configurations(TestableSequence, Testable):
             child.dump(stream)
 
     @classmethod
-    def load_content(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def load_content(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         cls, stream: TextIO
     ) -> "Configurations":
         num_children = int(stream.readline())
         return Configurations(Testable.load(stream) for _ in range(num_children))
 
-    def match(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def match(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, cpe: CPE
     ) -> bool:
         """Evaluate the applicability expression for a singleton inventory."""
         return any(child.match(cpe) for child in self)
 
-    def match_inventory(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def match_inventory(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, inventory: Iterable[CPE]
     ) -> bool:
         """Evaluate full Boolean applicability against a complete target inventory.
@@ -97,7 +97,7 @@ class Configurations(TestableSequence, Testable):
         inventory = tuple(inventory)
         return any(child.match_inventory(inventory) for child in self)
 
-    def candidate_criteria(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def candidate_criteria(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> Iterator[Testable]:
         """Yield marked criteria, including those inside negated expressions."""
@@ -112,12 +112,12 @@ class Configurations(TestableSequence, Testable):
         """
         return any(criterion.match(cpe) for criterion in self.candidate_criteria())
 
-    def __repr__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def __repr__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> str:
         return f"{self.__class__.__name__}({self.testable!r})"
 
-    def vulnerable_cpes(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def vulnerable_cpes(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> Iterator[CPE]:
         for testable in self:
@@ -129,13 +129,13 @@ class CVE:
     cve_id: str
     published_date: datetime
     last_modified_date: datetime
-    impact: Optional[Union[CVSS3, CVSS2]] = None
-    descriptions: Tuple[Description, ...] = ()
-    references: Tuple[Reference, ...] = ()
-    assigner: Optional[str] = None
+    impact: CVSS3 | CVSS2 | None = None
+    descriptions: tuple[Description, ...] = ()
+    references: tuple[Reference, ...] = ()
+    assigner: str | None = None
     configurations: Configurations = Configurations(())
 
-    def description(self, lang: str = "en") -> Optional[str]:
+    def description(self, lang: str = "en") -> str | None:
         for d in self.descriptions:
             if d.lang == lang:
                 return d.value
@@ -159,7 +159,7 @@ class CVE:
                 return severity
         return highest
 
-    def __str__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def __str__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> str:
         return self.cve_id

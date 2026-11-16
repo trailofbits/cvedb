@@ -1,7 +1,7 @@
 """Feed-scoped SQLite persistence for CVE records."""
 
 from collections.abc import Iterable, Iterator
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from sqlite3 import Connection, ProgrammingError
 from typing import TYPE_CHECKING, cast
 
@@ -323,8 +323,8 @@ class Schema:
             raise ValueError(f"Invalid stored configurations for {cve_id}; reimport this record")
         return CVE(
             cve_id=cve_id,
-            published_date=datetime.fromtimestamp(published, timezone.utc),
-            last_modified_date=datetime.fromtimestamp(modified, timezone.utc),
+            published_date=datetime.fromtimestamp(published, UTC),
+            last_modified_date=datetime.fromtimestamp(modified, UTC),
             impact=_impact(vector, cve_id),
             descriptions=tuple(Description(*d) for d in descriptions),
             references=tuple(Reference(*r) for r in references),

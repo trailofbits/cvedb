@@ -22,9 +22,60 @@ CVEdb Anti-Features:
 
 ## Installation
 
+CVEdb requires Python 3.11 or later. CI tests Python 3.11–3.15.
+
 ```console
 $ pip3 install cvedb
 ```
+
+## Development
+
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) 0.13.7, then
+create an isolated environment from the committed lockfile:
+
+```sh
+uv lock --check
+uv sync --frozen --python 3.13
+uv run --frozen prek install
+uv run --frozen prek auto-update --cooldown-days 7
+uv run --frozen pytest -q
+uv run --frozen ty check --error-on-warning cvedb test scripts
+uv run --frozen prek run --all-files
+uv run --frozen python -m scripts.check_dist
+uv run --frozen python -m scripts.audit_dependencies
+```
+
+The development group pins Ruff, ty, test tools, and the cross-platform wrappers
+for ShellCheck, shfmt, and actionlint. Prek runs Python lint/format and strict ty
+checks across all source, tests, and distribution scripts, plus offline tests, shell
+checks, and workflow checks. Python warnings fail tests. CI applies the same checks
+to PRs targeting any branch, including stacked PRs. The installed package includes
+a `py.typed` marker so downstream type checkers can use its annotations.
+
+`pyproject.toml` declares the package and its exact direct dependencies. The uv build
+backend keeps the existing package layout. `uv build` builds an sdist and then a wheel
+from that sdist. The distribution check validates metadata, entry points, license files,
+and bundled snapshots, then installs the wheel outside the source tree with hashed
+runtime dependencies and exercises offline loading and querying.
+
+When updating dependencies, check current stable releases, respect the configured
+seven-day maturity policy, update the exact pins, and regenerate `uv.lock` with
+`uv lock`. The uv, uv_build, Ruff, ty, and prek versions selected for this migration
+are the newest stable releases eligible under that policy on November 16, 2026.
+
+Dependabot checks Python dependencies and GitHub Actions weekly, groups updates,
+and waits seven days before proposing version updates. Security updates bypass
+the version-update cooldown. CI audits the full locked runtime and development
+dependency set on Python 3.11–3.15. The audit checks
+lockfile freshness and uses a temporary hashed export; it fails on known
+vulnerabilities, skipped dependencies, or advisory-service errors. Run the audit
+command above when you change dependencies. It requires network access to PyPI.
+
+## Releases
+
+See the [release procedure](docs/releases.md) for version updates, required
+validation, GitHub environment setup, and PyPI trusted publishing. Configure the
+protected `pypi` environment and trusted publisher before publishing a GitHub Release.
 
 ## Command Line Usage
 
@@ -110,14 +161,12 @@ not satisfy a bounded range.
 It rejects trailing fields, whitespace, and other suffixes. Expression
 serialization handles its record-ending newline separately.
 
-The focused CPE checks use an isolated Python environment with the development
-extras installed. Run them before committing CPE changes:
+Run the focused CPE checks before committing CPE changes:
 
 ```sh
-uv venv --python 3.13
-uv pip install -e '.[dev]'
-.venv/bin/python -m pytest -q test/test_cpe_matching.py
-prek run --files cvedb/cpe.py test/test_cpe_matching.py
+uv sync --frozen --python 3.13
+uv run --frozen pytest -q test/test_cpe_matching.py
+uv run --frozen prek run --files cvedb/cpe.py test/test_cpe_matching.py
 ```
 
 ## Applicability searches

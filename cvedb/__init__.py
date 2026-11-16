@@ -6,7 +6,7 @@ from pkgutil import iter_modules
 # Automatically load all modules in the `cvedb` package,
 # so all Feeds will auto-register themselves:
 package_dir = Path(__file__).resolve().parent
-for (_, module_name, _) in iter_modules([str(package_dir)]):
+for _, module_name, _ in iter_modules([str(package_dir)]):
     if module_name == "__main__":
         continue
     # import the module and iterate through its attributes

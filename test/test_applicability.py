@@ -1,5 +1,5 @@
 from contextlib import closing
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 import sqlite3
 from io import StringIO
 
@@ -14,7 +14,7 @@ from cvedb.sql import Or as SqlOr, SimpleQuery, TRUE
 APP = cpe.CPE(vendor="acme", product="widget", version="3.0")
 PLATFORM = cpe.CPE(vendor="platform", product="os", version="1.0")
 OTHER = cpe.CPE(vendor="other", product="os", version="1.0")
-NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
+NOW = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 def _leaf(value: cpe.CPE, vulnerable: bool = True) -> dict[str, object]:

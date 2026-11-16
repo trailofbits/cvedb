@@ -2,7 +2,6 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from dataclasses import replace
 from enum import Enum
-from typing import Optional, Tuple
 from collections.abc import Iterable
 
 from cvedb.cpe import CPE
@@ -56,7 +55,7 @@ class BeforeQuery(AbstractDateQuery, ABC):
     def __init__(self, date_before: datetime):
         super().__init__(date_before)
 
-    def matches(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def matches(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, cve: CVE
     ) -> bool:
         return utc_datetime(self.get_field(cve)) <= self.date
@@ -66,7 +65,7 @@ class AfterQuery(AbstractDateQuery, ABC):
     def __init__(self, date_after: datetime):
         super().__init__(date_after)
 
-    def matches(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def matches(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, cve: CVE
     ) -> bool:
         return utc_datetime(self.get_field(cve)) >= self.date
@@ -76,7 +75,7 @@ class AfterPublishedDateQuery(AfterQuery):
     def __init__(self, date_after: datetime):
         super().__init__(date_after)
 
-    def get_field(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def get_field(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, cve: CVE
     ) -> datetime:
         return cve.published_date
@@ -86,7 +85,7 @@ class BeforePublishedDateQuery(BeforeQuery):
     def __init__(self, date_before: datetime):
         super().__init__(date_before)
 
-    def get_field(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def get_field(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, cve: CVE
     ) -> datetime:
         return cve.published_date
@@ -96,7 +95,7 @@ class AfterModifiedDateQuery(AfterQuery):
     def __init__(self, date_after: datetime):
         super().__init__(date_after)
 
-    def get_field(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def get_field(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, cve: CVE
     ) -> datetime:
         return cve.last_modified_date
@@ -106,7 +105,7 @@ class BeforeModifiedDateQuery(BeforeQuery):
     def __init__(self, date_before: datetime):
         super().__init__(date_before)
 
-    def get_field(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def get_field(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, cve: CVE
     ) -> datetime:
         return cve.last_modified_date
@@ -133,7 +132,7 @@ class TermQuery(SearchQuery):
     def _contains(self, value: str | None) -> bool:
         return text_contains(value, self._query, self.case_sensitive)
 
-    def matches(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def matches(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, cve: CVE
     ) -> bool:
         if self._contains(cve.cve_id) or self._contains(cve.assigner):
@@ -149,12 +148,12 @@ class TermQuery(SearchQuery):
         else:
             return self._query.casefold()
 
-    def __hash__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def __hash__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> int:
         return hash(self._normalized_query)
 
-    def __eq__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def __eq__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, other: object
     ) -> bool:
         return (
@@ -166,12 +165,12 @@ class TermQuery(SearchQuery):
     def __lt__(self, other: object) -> bool:
         return isinstance(other, TermQuery) and self._normalized_query < other._normalized_query
 
-    def __str__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def __str__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> str:
         return self._query
 
-    def __repr__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def __repr__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> str:
         return (
@@ -181,7 +180,7 @@ class TermQuery(SearchQuery):
 
 
 class DescriptionQuery(TermQuery):
-    def matches(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def matches(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, cve: CVE
     ) -> bool:
         return any(self._contains(description.value) for description in cve.descriptions)
@@ -189,18 +188,18 @@ class DescriptionQuery(TermQuery):
 
 class CompoundQuery(SearchQuery, ABC):
     def __init__(self, *sub_queries: SearchQuery):
-        self.sub_queries: Tuple[SearchQuery, ...] = tuple(sub_queries)
+        self.sub_queries: tuple[SearchQuery, ...] = tuple(sub_queries)
 
 
 class AndQuery(CompoundQuery):
-    def matches(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def matches(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, cve: CVE
     ) -> bool:
         return all(q.matches(cve) for q in self.sub_queries)
 
 
 class OrQuery(CompoundQuery):
-    def matches(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def matches(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, cve: CVE
     ) -> bool:
         return any(q.matches(cve) for q in self.sub_queries)
@@ -213,13 +212,13 @@ class CPEQuery(SearchQuery):
     candidate search. Use EnvironmentQuery for complete inventory evaluation.
     """
 
-    def __init__(self, cpe: Optional[CPE] = None, **kwargs: object) -> None:
+    def __init__(self, cpe: CPE | None = None, **kwargs: object) -> None:
         if cpe is None:
             self.cpe: CPE = replace(CPE(), **kwargs)
         else:
             self.cpe = cpe
 
-    def matches(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def matches(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, cve: CVE
     ) -> bool:
         return cve.configurations.match_candidate(self.cpe)
@@ -231,7 +230,7 @@ class EnvironmentQuery(SearchQuery):
     def __init__(self, inventory: Iterable[CPE]) -> None:
         self.inventory = tuple(inventory)
 
-    def matches(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def matches(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, cve: CVE
     ) -> bool:
         return cve.configurations.match_inventory(self.inventory)

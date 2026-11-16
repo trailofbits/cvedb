@@ -3,7 +3,7 @@ import json
 import sys
 import urllib.request
 import urllib.error
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, replace
 from datetime import datetime
 import gzip
@@ -14,7 +14,7 @@ from importlib.metadata import version as package_version
 from pathlib import Path
 from time import monotonic
 import zlib
-from typing import Any, Dict, Iterable, List, Optional, TextIO, Union, cast
+from typing import Any, TextIO, cast
 
 from cvss import CVSS2, CVSS3, CVSSError
 from dateutil.parser import isoparse
@@ -67,8 +67,8 @@ class Meta:
     sha256: bytes
 
     @staticmethod
-    def loads(meta_str: Union[str, bytes]) -> "Meta":
-        kvs: Dict[str, Any] = {}
+    def loads(meta_str: str | bytes) -> "Meta":
+        kvs: dict[str, Any] = {}
         for line in meta_str.splitlines():
             if isinstance(line, str):
                 line = line.encode("utf-8")
@@ -100,11 +100,11 @@ class JsonDataSource(DataSource):
         super().__init__(meta.last_modified_date)
         self.meta: Meta = meta
         if isinstance(cves, list):
-            self.cves: List[CVE] = cves
+            self.cves: list[CVE] = cves
         else:
             self.cves = list(cves)
 
-    def __iter__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def __iter__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> Iterator[CVE]:
         return iter(self.cves)
@@ -113,7 +113,7 @@ class JsonDataSource(DataSource):
         return len(self.cves)
 
     @staticmethod
-    def _parse_version_bound(node: Dict[str, Any], edge: str) -> tuple[str | None, bool]:
+    def _parse_version_bound(node: dict[str, Any], edge: str) -> tuple[str | None, bool]:
         included, excluded = f"version{edge}Including", f"version{edge}Excluding"
         bounds: list[str | None] = []
         for key in (included, excluded):
@@ -127,7 +127,7 @@ class JsonDataSource(DataSource):
         return (excluding, False) if excluding is not None else (including, True)
 
     @staticmethod
-    def _parse_config_leaf(node: Dict[str, Any]) -> CPEMatch:
+    def _parse_config_leaf(node: dict[str, Any]) -> CPEMatch:
         value = node["cpe23Uri"]
         if not isinstance(value, str) or not value:
             raise ValueError("Configuration cpe23Uri must be a nonempty string")
@@ -155,7 +155,7 @@ class JsonDataSource(DataSource):
         return CPEMatch(criterion, vulnerable)
 
     @staticmethod
-    def _parse_config_node(node: Dict[str, Any]) -> Testable:
+    def _parse_config_node(node: dict[str, Any]) -> Testable:
         if not isinstance(node, dict):
             raise ValueError("A configuration node must be an object")
         if "cpe23Uri" in node:
@@ -183,7 +183,7 @@ class JsonDataSource(DataSource):
         )
 
     @staticmethod
-    def parse_configurations(config_dict: Dict[str, Any]) -> Configurations:
+    def parse_configurations(config_dict: dict[str, Any]) -> Configurations:
         """Parse optional legacy configurations without inferring universal applicability."""
         if not isinstance(config_dict, dict):
             raise ValueError("CVE configurations must be an object")
@@ -197,7 +197,7 @@ class JsonDataSource(DataSource):
         return Configurations(JsonDataSource._parse_config_node(node) for node in nodes)
 
     @staticmethod
-    def parse_cve(cve_obj: Dict[str, Any]) -> CVE:
+    def parse_cve(cve_obj: dict[str, Any]) -> CVE:
         cve_id = cve_obj["cve"]["CVE_data_meta"]["ID"]
         assigner = cve_obj["cve"]["CVE_data_meta"].get("ASSIGNER", None)
         references = tuple(
@@ -333,7 +333,7 @@ class JsonDataSource(DataSource):
         return converted
 
     @staticmethod
-    def load(json_obj: Dict[str, Any], meta: Optional[Meta] = None) -> "JsonDataSource":
+    def load(json_obj: dict[str, Any], meta: Meta | None = None) -> "JsonDataSource":
         if "vulnerabilities" in json_obj:
             json_obj = JsonDataSource.two_to_one(json_obj)
         for key, expected in (
@@ -452,7 +452,7 @@ def _request(
     return data
 
 
-def download(url: str, size: Optional[int] = None, show_progress: bool = True) -> bytes:
+def download(url: str, size: int | None = None, show_progress: bool = True) -> bytes:
     """Download a bounded feed body with explicit socket and transfer-loop timeouts.
 
     Args:
@@ -618,7 +618,7 @@ def _load_snapshot(data: bytes, meta: Meta, source: str) -> JsonDataSource:
 
 
 class JsonFeed(Feed):
-    def __init__(self, name: str, initial_data: Optional[Data] = None):
+    def __init__(self, name: str, initial_data: Data | None = None):
         super().__init__(name, initial_data)
         self.meta_url: str = f"{BASE_JSON_URL}{self.name}.meta"
         self.gz_url: str = f"{BASE_JSON_URL}{self.name}.json.gz"
@@ -641,7 +641,7 @@ class JsonFeed(Feed):
 
         return meta
 
-    def _load_initial(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def _load_initial(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> DataSource | None:
         if self._data is not None:
@@ -652,8 +652,8 @@ class JsonFeed(Feed):
         data = _read_file(self.cached_json_path, _MAX_GZIP_BYTES, expected=meta.gz_size)
         return _load_snapshot(data, meta, str(self.cached_json_path))
 
-    def reload(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
-        self, existing_data: Optional[Data] = None
+    def reload(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
+        self, existing_data: Data | None = None
     ) -> DataSource:
         meta_data = _request(self.meta_url, _MAX_META_BYTES)
         new_meta = _snapshot_meta(meta_data, self.meta_url)

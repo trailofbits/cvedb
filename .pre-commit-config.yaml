@@ -1,22 +1,45 @@
-files: >-
-  (?x)^(
-    cvedb/(cpe|cve|nvd|schemas|search|sql|dates|db|feed|cli|__main__)\.py
-    |test/test_(cpe_matching|applicability|storage|nvd|search|search_dates
-    |updates|contexts|feeds|transport|cli)\.py
-    |test/feed_fixtures\.py
-  )$
 repos:
   - repo: local
     hooks:
       - id: ruff
-        name: Lint correctness fixes
+        name: Lint Python
         language: system
-        entry: .venv/bin/ruff check
+        entry: uv run --frozen ruff check
+        types: [python]
       - id: ruff-format
-        name: Check correctness formatting
+        name: Check Python formatting
         language: system
-        entry: .venv/bin/ruff format --check
+        entry: uv run --frozen ruff format --check
+        types: [python]
       - id: ty
-        name: Check correctness types
+        name: Check Python types
         language: system
-        entry: .venv/bin/ty check --error-on-warning
+        entry: uv run --frozen ty check --error-on-warning cvedb test scripts
+        pass_filenames: false
+        files: ^(cvedb/|test/|scripts/|pyproject\.toml|uv\.lock)
+      - id: pytest
+        name: Run offline Python tests
+        language: system
+        entry: uv run --frozen pytest -q
+        pass_filenames: false
+        files: ^(cvedb/|test/|scripts/|pyproject\.toml|uv\.lock)
+      - id: shellcheck
+        name: Check shell scripts
+        language: system
+        entry: uv run --frozen shellcheck
+        types: [shell]
+      - id: shfmt
+        name: Check shell formatting
+        language: system
+        entry: uv run --frozen shfmt -i 2 -d
+        types: [shell]
+      - id: actionlint
+        name: Check GitHub Actions
+        language: system
+        entry: uv run --frozen actionlint
+        files: ^\.github/workflows/.*\.ya?ml$
+      - id: zizmor
+        name: Audit GitHub Actions
+        language: system
+        entry: uv run --frozen zizmor --offline --min-severity low --min-confidence low
+        files: ^\.github/workflows/.*\.ya?ml$

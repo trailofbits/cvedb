@@ -238,7 +238,7 @@ def test_data_version_respects_empty_and_custom_parent_scopes(tmp_path: Path) ->
     class CustomFeed(Feed):
         register = False
 
-        def reload(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+        def reload(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
             self, existing_data: Data | None = None
         ) -> DataSource:
             raise AssertionError("custom initialization")
