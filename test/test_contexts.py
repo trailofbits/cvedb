@@ -1,10 +1,13 @@
 """Owned connection and nested transaction behavior."""
 
-from collections.abc import Iterable
+from collections.abc import Generator, Iterable, Mapping, Sequence
 from contextlib import closing
 from datetime import datetime, timezone
+import gc
 from pathlib import Path
 import sqlite3
+from threading import Thread
+from typing import cast
 from unittest.mock import Mock, patch
 
 import pytest
@@ -176,3 +179,108 @@ def test_unentered_context_cannot_exit_and_remains_reusable(tmp_path: Path) -> N
         context.__exit__(None, None, None)
     with context as db:
         assert len(db.data()) == 0
+
+
+def _partial_results(db: CVEdb, mode: str) -> Generator[CVE, None, None]:
+    results = db.data().search("") if mode == "search" else iter(db.data())
+    assert isinstance(results, Generator)
+    next(results)
+    return cast(Generator[CVE, None, None], results)
+
+
+def _iterator_feed() -> Feed:
+    parent = _Feed()
+    parent._data = InMemoryData(
+        NOW, (CVE("CVE-2020-0001", NOW, NOW), CVE("CVE-2020-0002", NOW, NOW))
+    )
+    return parent
+
+
+@pytest.mark.parametrize("mode", ["search", "plain"])
+def test_partial_iterator_cleanup_after_owned_connection_closes(tmp_path: Path, mode: str) -> None:
+    with CVEdb.open(tmp_path / "cleanup.sqlite", [_iterator_feed()]) as db:
+        results = _partial_results(db, mode)
+    results.close()
+    results.close()
+
+
+@pytest.mark.parametrize("mode", ["search", "plain"])
+def test_partial_iterator_gc_after_connection_closes_is_quiet(tmp_path: Path, mode: str) -> None:
+    unraisable: list[object] = []
+    with patch("sys.unraisablehook", side_effect=unraisable.append):
+        with CVEdb.open(tmp_path / "gc.sqlite", [_iterator_feed()]) as db:
+            results = _partial_results(db, mode)
+        del results
+        gc.collect()
+    assert unraisable == []
+
+
+@pytest.mark.parametrize("mode", ["search", "plain"])
+@pytest.mark.parametrize("started", [False, True])
+def test_iterator_reads_after_owned_connection_closes_still_fail(
+    tmp_path: Path, mode: str, started: bool
+) -> None:
+    with CVEdb.open(tmp_path / "closed-read.sqlite", [_iterator_feed()]) as db:
+        results = db.data().search("") if mode == "search" else iter(db.data())
+        assert isinstance(results, Generator)
+        if started:
+            next(results)
+    with pytest.raises(sqlite3.ProgrammingError):
+        next(results)
+    results.close()
+    with pytest.raises(sqlite3.ProgrammingError):
+        db.data().search("")
+
+
+class _CloseFailureCursor(sqlite3.Cursor):
+    def close(  # ty: ignore[missing-override-decorator]  # Python 3.10 lacks override.
+        self,
+    ) -> None:
+        super().close()
+        connection = cast(_CloseFailureConnection, self.connection)
+        raise connection.close_error("unexpected cursor close failure")
+
+
+class _CloseFailureConnection(sqlite3.Connection):
+    close_error: type[sqlite3.Error]
+
+    def execute(  # ty: ignore[missing-override-decorator]  # Python 3.10 lacks override.
+        self, sql: str, parameters: object = ()
+    ) -> sqlite3.Cursor:
+        values = cast(Sequence[object] | Mapping[str, object], parameters)
+        return self.cursor(factory=_CloseFailureCursor).execute(sql, values)
+
+
+@pytest.mark.parametrize("mode", ["search", "plain"])
+@pytest.mark.parametrize("error", [sqlite3.ProgrammingError, sqlite3.OperationalError])
+def test_live_connection_cursor_cleanup_errors_are_not_suppressed(
+    tmp_path: Path, mode: str, error: type[sqlite3.Error]
+) -> None:
+    connection = sqlite3.connect(":memory:", factory=_CloseFailureConnection)
+    assert isinstance(connection, _CloseFailureConnection)
+    connection.close_error = error
+    with patch("cvedb.db.connect", return_value=connection):
+        with CVEdb.open(tmp_path / "cursor-error.sqlite", [_iterator_feed()]) as db:
+            results = _partial_results(db, mode)
+            with pytest.raises(error, match="unexpected cursor close failure"):
+                results.close()
+
+
+@pytest.mark.parametrize("mode", ["search", "plain"])
+def test_iterator_cleanup_on_wrong_thread_still_fails(tmp_path: Path, mode: str) -> None:
+    errors: list[BaseException] = []
+    with CVEdb.open(tmp_path / "thread-error.sqlite", [_iterator_feed()]) as db:
+        results = _partial_results(db, mode)
+
+        def close_on_other_thread() -> None:
+            try:
+                results.close()
+            except BaseException as error:
+                errors.append(error)
+
+        thread = Thread(target=close_on_other_thread)
+        thread.start()
+        thread.join()
+        assert len(errors) == 1
+        assert isinstance(errors[0], sqlite3.ProgrammingError)
+        assert db.connection.execute("SELECT COUNT(*) FROM cves").fetchone()[0] == 2
