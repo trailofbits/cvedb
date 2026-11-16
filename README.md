@@ -239,3 +239,35 @@ of that connection and any surrounding transaction. Refresh savepoints preserve
 that transaction instead of committing it. Pass `parents=[]` for an empty feed
 collection: counting, iteration, searching, and explicit refresh return empty
 results without downloading data.
+
+
+## Offline snapshots and validation
+
+Ordinary queries of built-in NVD feeds use stored data and installed bundles.
+Missing bundle pairs leave that feed unavailable offline without blocking other
+installed feeds. A corrupt pair raises an error identifying its file and does
+not trigger a network fallback. Custom feeds control their own initial loading.
+
+The installed NVD snapshot contains feed years **2002–2021**, with metadata last
+modified on **May 10, 2021**. The 2002 feed also contains earlier CVEs. The 2021
+feed is a partial-year snapshot; registered newer feed years do not imply bundled
+or current coverage. Use `--update` to request current NVD 2.0 yearly feeds.
+
+Use `--data-version` to inspect selected feeds without loading them or contacting
+the network. It shows installed complete bundle pairs and their metadata dates
+separately from stored CVE counts, stored modification dates, and successful
+upstream check dates. Installed metadata summarizes coverage; the report does
+not decompress and hash-verify every bundle.
+
+Both bundled and downloaded snapshots validate gzip length, uncompressed length,
+and the SHA-256 of uncompressed JSON before ingestion, following the
+[NVD metadata contract][nvd-feed-metadata]. Invalid gzip headers/trailers, corrupt
+checksums, malformed metadata/JSON/CVEs, and excessive nesting fail with source
+context. Failed updates preserve previously stored records and timestamps.
+
+The loader limits metadata to 64 KiB, gzip data to 256 MiB, expanded JSON to 2 GiB,
+and object/array nesting to 256 container levels. Network operations use a
+30-second socket timeout and a 300-second transfer-loop deadline checked between
+available chunks. DNS resolution follows the system resolver's timing.
+
+[nvd-feed-metadata]: https://nvd.nist.gov/vuln/data-feeds

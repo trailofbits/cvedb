@@ -372,9 +372,12 @@ def test_unloaded_persisted_view_retains_missing_timestamp_defense() -> None:
         payload = b'{"CVE_Items": []}'
         compressed = compress(payload, mtime=0)
         metadata = Meta(NOW, len(payload), 0, len(compressed), sha256(payload).digest())
+        raw_metadata = (
+            f"lastModifiedDate:{NOW.isoformat()}\nsize:{metadata.size}\nzipSize:0\n"
+            f"gzSize:{metadata.gz_size}\nsha256:{metadata.sha256.hex()}\n"
+        ).encode()
         with (
-            patch("cvedb.nvd.urllib.request.urlopen", return_value=BytesIO(b"meta")),
-            patch("cvedb.nvd.Meta.load", return_value=metadata),
+            patch("cvedb.nvd.urllib.request.urlopen", return_value=BytesIO(raw_metadata)),
             patch("cvedb.nvd.download", return_value=compressed),
         ):
             assert list(FEEDS["2022"].reload(view)) == []

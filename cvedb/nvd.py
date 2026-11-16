@@ -2,14 +2,21 @@ import itertools
 import json
 import sys
 import urllib.request
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from gzip import decompress
+import urllib.error
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass, replace
+from datetime import datetime
+import gzip
+from hashlib import sha256
+import http.client
+import io
 from importlib.metadata import version as package_version
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, List, Optional, TextIO, Union, cast
+from time import monotonic
+import zlib
+from typing import Any, Dict, Iterable, List, Optional, TextIO, Union, cast
 
-from cvss import CVSS2, CVSS3
+from cvss import CVSS2, CVSS3, CVSSError
 from dateutil.parser import isoparse
 from tqdm import tqdm
 
@@ -29,6 +36,14 @@ _CRITERION_FIELDS = {"cpe23Uri", "vulnerable", "cpe_name", *_VERSION_BOUND_FIELD
 BASE_JSON_URL: str = "https://nvd.nist.gov/feeds/json/cve/2.0/nvdcve-2.0-"
 
 PRE_SEED_DATA_DIR: Path = Path(__file__).absolute().parent / "data"
+
+_MAX_META_BYTES = 64 * 1024
+_MAX_GZIP_BYTES = 256 * 1024 * 1024
+_MAX_JSON_BYTES = 2 * 1024 * 1024 * 1024
+_MAX_JSON_DEPTH = 256
+_SOCKET_TIMEOUT = 30
+_TRANSFER_SECONDS = 300
+_READ_CHUNK = 65536
 
 
 def camel_to_underscore(text: str) -> str:
@@ -67,7 +82,7 @@ class Meta:
                 raise ValueError(f"Duplicate metadata key: {key!r}")
             value = line[first_colon + 1 :].decode("utf-8")
             if key == "last_modified_date":
-                value = isoparse(value)
+                value = utc_datetime(cast(datetime, isoparse(value)))
             elif key == "sha256":
                 value = bytes.fromhex(value)
             else:
@@ -193,8 +208,8 @@ class JsonDataSource(DataSource):
             Description(lang=desc["lang"], value=desc["value"])
             for desc in cve_obj["cve"].get("description", {}).get("description_data", [])
         )
-        published_date = isoparse(cve_obj["publishedDate"])
-        last_modified_date = isoparse(cve_obj["lastModifiedDate"])
+        published_date = utc_datetime(cast(datetime, isoparse(cve_obj["publishedDate"])))
+        last_modified_date = utc_datetime(cast(datetime, isoparse(cve_obj["lastModifiedDate"])))
         if "baseMetricV3" in cve_obj["impact"]:
             impact = CVSS3(cve_obj["impact"]["baseMetricV3"]["cvssV3"]["vectorString"])
         elif "baseMetricV2" in cve_obj["impact"]:
@@ -214,10 +229,7 @@ class JsonDataSource(DataSource):
 
     @staticmethod
     def _convert_timestamp(value: str) -> str:
-        timestamp = cast(datetime, isoparse(value))
-        if timestamp.tzinfo is None:
-            timestamp = timestamp.replace(tzinfo=timezone.utc)
-        return timestamp.isoformat()
+        return utc_datetime(cast(datetime, isoparse(value))).isoformat()
 
     @staticmethod
     def _convert_impact(metrics: dict[str, Any]) -> dict[str, Any]:
@@ -338,40 +350,271 @@ class JsonDataSource(DataSource):
                 raise ValueError(
                     'If `meta` is None, `json_obj["CVE_data_timestamp"]` must contain a timestamp'
                 )
-            meta = Meta(isoparse(json_obj["CVE_data_timestamp"]).astimezone(), 0, 0, 0, b"")
+            meta = Meta(
+                utc_datetime(cast(datetime, isoparse(json_obj["CVE_data_timestamp"]))), 0, 0, 0, b""
+            )
         return JsonDataSource(
             meta, (JsonDataSource.parse_cve(cve_obj) for cve_obj in json_obj.get("CVE_Items", ()))
         )
 
 
-def download(url: str, size: Optional[int] = None, show_progress: bool = True) -> bytes:
-    cvedb_version = package_version("cvedb")
-    request = urllib.request.Request(
-        url=url,
-        data=None,
-        headers={
-            "User-Agent": (
-                f"Mozilla/5.0 ({sys.platform}) AppleWebKit/605.1.15 "
-                f"(KHTML, like Gecko) CVEdb/{cvedb_version}"
+def _deadline(deadline: float | None, source: str) -> None:
+    if deadline is not None and monotonic() >= deadline:
+        raise TimeoutError(f"Transfer deadline exceeded while reading {source}")
+
+
+def _read_limited(
+    read: Callable[[int], object],
+    limit: int,
+    source: str,
+    *,
+    deadline: float | None = None,
+    update: Callable[[int], object] | None = None,
+) -> bytes:
+    result = bytearray()
+    while True:
+        _deadline(deadline, source)
+        chunk = read(min(_READ_CHUNK, limit - len(result) + 1))
+        _deadline(deadline, source)
+        if not isinstance(chunk, bytes):
+            raise ValueError(f"Cannot read {source}: expected bytes from the input stream")
+        if not chunk:
+            return bytes(result)
+        if len(result) + len(chunk) > limit:
+            raise ValueError(f"Cannot read {source}: byte limit {limit} exceeded")
+        result.extend(chunk)
+        if update is not None:
+            update(len(chunk))
+
+
+def _check_length(actual: int, expected: int, source: str) -> None:
+    if actual != expected:
+        raise ValueError(
+            f"Size mismatch for {source}: expected {expected} bytes, received {actual}"
+        )
+
+
+def _response_length(response: object, limit: int, source: str) -> int | None:
+    headers = getattr(response, "headers", {})
+    value = headers.get("Content-Length")
+    if value is None:
+        return None
+    try:
+        length = int(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"Invalid Content-Length while reading {source}: {value!r}") from error
+    if not 0 <= length <= limit:
+        raise ValueError(
+            f"Cannot read {source}: declared length {length} exceeds byte limit {limit}"
+        )
+    return length
+
+
+def _request(
+    url: str,
+    limit: int,
+    *,
+    expected: int | None = None,
+    show_progress: bool = False,
+) -> bytes:
+    if expected is not None:
+        if not 0 <= expected <= limit:
+            raise ValueError(
+                f"Cannot download {url}: declared size {expected} exceeds limit {limit}"
             )
-        },
+        limit = min(limit, expected)
+    deadline = monotonic() + _TRANSFER_SECONDS
+    request = urllib.request.Request(
+        url, headers={"User-Agent": f"CVEdb/{package_version('cvedb')} ({sys.platform})"}
     )
-    with urllib.request.urlopen(request) as req:
-        if not show_progress:
-            return cast(bytes, req.read())
-        ret = bytearray()
-        filename = url[url.rfind("/") + 1 :]
-        with tqdm(desc=filename, unit=" b", leave=False) as t:
-            if size is not None:
-                t.total = size
-            while True:
-                chunk = req.read(65536)
-                n = len(chunk)
-                if n == 0:
-                    break
-                t.update(n)
-                ret.extend(chunk)
-        return bytes(ret)
+    try:
+        with urllib.request.urlopen(request, timeout=_SOCKET_TIMEOUT) as response:
+            declared = _response_length(response, limit, url)
+            with tqdm(
+                desc=url.rsplit("/", 1)[-1],
+                unit=" b",
+                leave=False,
+                disable=not show_progress,
+                total=expected or declared,
+            ) as progress:
+                data = _read_limited(
+                    response.read1, limit, url, deadline=deadline, update=progress.update
+                )
+    except urllib.error.HTTPError as error:
+        error.close()
+        raise OSError(f"Cannot download {url}: {error}") from error
+    except (OSError, http.client.HTTPException) as error:
+        raise OSError(f"Cannot download {url}: {error}") from error
+    if declared is not None:
+        _check_length(len(data), declared, url)
+    if expected is not None:
+        _check_length(len(data), expected, url)
+    return data
+
+
+def download(url: str, size: Optional[int] = None, show_progress: bool = True) -> bytes:
+    """Download a bounded feed body with explicit socket and transfer-loop timeouts.
+
+    Args:
+        url: The resource to download.
+        size: The expected byte count, when known.
+        show_progress: Whether to show download progress on stderr.
+
+    Raises:
+        ValueError: The declared or received size is invalid or exceeds a limit.
+        OSError: The request, available-chunk read, or transfer deadline fails.
+    """
+    return _request(url, _MAX_GZIP_BYTES, expected=size, show_progress=show_progress)
+
+
+def _read_file(path: Path, limit: int, *, expected: int | None = None) -> bytes:
+    try:
+        length = path.stat().st_size
+        if length > limit:
+            raise ValueError(f"Cannot read {path}: file size {length} exceeds byte limit {limit}")
+        if expected is not None:
+            _check_length(length, expected, str(path))
+        with path.open("rb") as stream:
+            read_limit = limit if expected is None else min(limit, expected)
+            data = _read_limited(stream.read, read_limit, str(path))
+    except OSError as error:
+        raise OSError(f"Cannot read bundled snapshot file {path}: {error}") from error
+    if expected is not None:
+        _check_length(len(data), expected, str(path))
+    return data
+
+
+def _snapshot_meta(data: bytes, source: str) -> Meta:
+    try:
+        meta = Meta.loads(data)
+        if len(meta.sha256) != 32:
+            raise ValueError("sha256 must contain exactly 32 bytes")
+        for name, value, limit in (
+            ("size", meta.size, _MAX_JSON_BYTES),
+            ("gzSize", meta.gz_size, _MAX_GZIP_BYTES),
+        ):
+            if not 0 < value <= limit:
+                raise ValueError(f"{name} must be positive and at most {limit} bytes")
+        if meta.zip_size < 0:
+            raise ValueError("zipSize must be nonnegative")
+        return replace(meta, last_modified_date=utc_datetime(meta.last_modified_date))
+    except (ValueError, TypeError, OverflowError) as error:
+        raise ValueError(f"Cannot parse snapshot metadata {source}: {error}") from error
+
+
+def _expand_snapshot(data: bytes, meta: Meta, source: str) -> bytes:
+    _check_length(len(data), meta.gz_size, source)
+    try:
+        with io.BytesIO(data) as compressed, gzip.GzipFile(fileobj=compressed, mode="rb") as stream:
+            payload = _read_limited(
+                stream.read, min(meta.size, _MAX_JSON_BYTES), f"expanded snapshot {source}"
+            )
+    except (OSError, EOFError, zlib.error) as error:
+        raise ValueError(f"Cannot decompress snapshot {source}: {error}") from error
+    _check_length(len(payload), meta.size, f"expanded snapshot {source}")
+    if sha256(payload).digest() != meta.sha256:
+        raise ValueError(f"SHA-256 mismatch for snapshot {source}; install a valid bundle or retry")
+    return payload
+
+
+def _validate_nesting(document: object) -> None:
+    frames: list[tuple[Iterator[object], int]] = [(iter((document,)), 0)]
+    while frames:
+        iterator, parent_depth = frames[-1]
+        try:
+            value = next(iterator)
+        except StopIteration:
+            frames.pop()
+            continue
+        if isinstance(value, dict):
+            children = iter(value.values())
+        elif isinstance(value, list):
+            children = iter(value)
+        else:
+            continue
+        depth = parent_depth + 1
+        if depth > _MAX_JSON_DEPTH:
+            raise ValueError(f"JSON nesting exceeds {_MAX_JSON_DEPTH} container levels")
+        frames.append((children, depth))
+
+
+def _record_object(value: object, field: str) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise ValueError(f"CVE {field} must be an object")
+    return cast(dict[str, object], value)
+
+
+def _record_text(value: object, field: str, *, optional: bool = False) -> None:
+    if value is None and optional:
+        return
+    if not isinstance(value, str):
+        raise ValueError(f"CVE {field} must be a string")
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as error:
+        raise ValueError(f"CVE {field} must contain valid UTF-8 text") from error
+
+
+def _text_rows(value: object, fields: tuple[str, ...], *, optional: bool = False) -> None:
+    if not isinstance(value, list):
+        raise ValueError(f"CVE {fields!r} entries must be an array")
+    for item in value:
+        row = _record_object(item, "text entry")
+        for field in fields:
+            _record_text(row.get(field), field, optional=optional)
+
+
+def _validate_records(document: dict[str, object]) -> None:
+    records = document.get("CVE_Items")
+    if not isinstance(records, list):
+        raise ValueError("CVE_Items must be an array")
+    for value in records:
+        item = _record_object(value, "item")
+        cve = _record_object(item.get("cve"), "record")
+        metadata = _record_object(cve.get("CVE_data_meta"), "metadata")
+        identity = metadata.get("ID")
+        if not isinstance(identity, str) or not identity:
+            raise ValueError("CVE ID must be a nonempty string")
+        _record_text(identity, "ID")
+        _record_text(metadata.get("ASSIGNER"), "ASSIGNER", optional=True)
+        for field in ("publishedDate", "lastModifiedDate"):
+            _record_text(item.get(field), field)
+        descriptions = _record_object(cve.get("description", {}), "description")
+        _text_rows(descriptions.get("description_data", []), ("lang", "value"))
+        references = _record_object(cve.get("references", {}), "references")
+        _text_rows(references.get("reference_data", []), ("name", "url"), optional=True)
+
+
+def _invalid_json_constant(value: str) -> object:
+    raise ValueError(f"Non-JSON numeric constant {value!r}")
+
+
+def _load_snapshot(data: bytes, meta: Meta, source: str) -> JsonDataSource:
+    payload = _expand_snapshot(data, meta, source)
+    try:
+        document = json.loads(payload, parse_constant=_invalid_json_constant)
+        if not isinstance(document, dict):
+            raise ValueError("the JSON root must be an object")
+        _validate_nesting(document)
+        collection = "vulnerabilities" if "vulnerabilities" in document else "CVE_Items"
+        if not isinstance(document.get(collection), list):
+            raise ValueError(f"{collection} must be an array")
+        if collection == "vulnerabilities":
+            document = JsonDataSource.two_to_one(document)
+        _validate_records(document)
+        return JsonDataSource.load(document, meta)
+    except (
+        ValueError,
+        TypeError,
+        KeyError,
+        IndexError,
+        AttributeError,
+        RecursionError,
+        OverflowError,
+        NotImplementedError,
+        CVSSError,
+    ) as error:
+        raise ValueError(f"Cannot parse snapshot {source}: {error}") from error
 
 
 class JsonFeed(Feed):
@@ -382,36 +625,47 @@ class JsonFeed(Feed):
         self.cached_meta_path: Path = PRE_SEED_DATA_DIR / f"nvdcve-1.1-{self.name}.meta"
         self.cached_json_path: Path = PRE_SEED_DATA_DIR / f"nvdcve-1.1-{self.name}.json.gz"
 
+    def _installed_meta(self) -> Meta | None:
+        try:
+            if not self.cached_json_path.exists() or not self.cached_meta_path.exists():
+                return None
+            compressed_size = self.cached_json_path.stat().st_size
+        except OSError as error:
+            raise OSError(
+                f"Cannot inspect bundled snapshot {self.cached_json_path} "
+                f"and {self.cached_meta_path}: {error}"
+            ) from error
+        data = _read_file(self.cached_meta_path, _MAX_META_BYTES)
+        meta = _snapshot_meta(data, str(self.cached_meta_path))
+        _check_length(compressed_size, meta.gz_size, str(self.cached_json_path))
+
+        return meta
+
     def _load_initial(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
         self,
     ) -> DataSource | None:
         if self._data is not None:
             return self._data
-        if not self.cached_json_path.exists() or not self.cached_meta_path.exists():
+        meta = self._installed_meta()
+        if meta is None:
             return None
-        with self.cached_meta_path.open("r") as meta:
-            with self.cached_json_path.open("rb") as compressed_json:
-                return JsonDataSource.load(
-                    json.loads(decompress(compressed_json.read())), Meta.load(meta)
-                )
+        data = _read_file(self.cached_json_path, _MAX_GZIP_BYTES, expected=meta.gz_size)
+        return _load_snapshot(data, meta, str(self.cached_json_path))
 
     def reload(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
         self, existing_data: Optional[Data] = None
     ) -> DataSource:
-        with urllib.request.urlopen(self.meta_url) as req:
-            new_meta = Meta.load(req)
+        meta_data = _request(self.meta_url, _MAX_META_BYTES)
+        new_meta = _snapshot_meta(meta_data, self.meta_url)
         last_modified = None if existing_data is None else existing_data.last_modified_date
         if (
             existing_data is not None
             and last_modified is not None
-            and utc_datetime(new_meta.last_modified_date) <= utc_datetime(last_modified)
+            and new_meta.last_modified_date <= utc_datetime(last_modified)
         ):
-            # the existing data is newer
             return existing_data
         compressed = download(self.gz_url, new_meta.gz_size, sys.stderr.isatty())
-        decompressed = decompress(compressed)
-        data = json.loads(decompressed)
-        return JsonDataSource.load(data, new_meta)
+        return _load_snapshot(compressed, new_meta, self.gz_url)
 
 
 for year in range(2002, datetime.now().year + 1):

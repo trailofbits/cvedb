@@ -5,9 +5,10 @@ import sys
 from typing import List, Optional, Union
 
 from .cpe import Logical
-from cvedb.dates import parse_before_date, parse_date
+from cvedb.dates import parse_before_date, parse_date, utc_datetime
 from .db import CVEdb, DEFAULT_DB_PATH
-from .feed import Data
+from cvedb.feed import Data
+from cvedb.nvd import JsonFeed
 from .printing import print_cves
 from .search import (
     AfterModifiedDateQuery, AfterPublishedDateQuery, AndQuery, BeforeModifiedDateQuery, BeforePublishedDateQuery,
@@ -24,6 +25,32 @@ def parse_cpe_arg(cpe_str: str) -> Union[Logical, str]:
         if logical.value == cpe_str:
             return logical
     return cpe_str
+
+
+def _date_label(value: datetime | None, missing: str = "never") -> str:
+    return missing if value is None else utc_datetime(value).strftime("%Y-%m-%d")
+
+
+def _data_version_table(db: CVEdb) -> tuple[list[list[str]], str]:
+    rows = [["Feed", "Bundled date", "Stored modified", "Last checked", "Stored CVEs"]]
+    bundles: list[tuple[str, datetime]] = []
+    for feed in db.feeds:
+        metadata = feed.parent._installed_meta() if isinstance(feed.parent, JsonFeed) else None
+        if metadata is not None:
+            bundles.append((feed.name, metadata.last_modified_date))
+        bundled = _date_label(None if metadata is None else metadata.last_modified_date, "none")
+        count = db.connection.execute(
+            "SELECT COUNT(*) FROM cves WHERE feed=?", (feed.feed_id,)
+        ).fetchone()[0]
+        rows.append([feed.name, bundled, _date_label(feed.last_modified()),
+                     _date_label(feed.last_checked()), str(count)])
+    summary = "Installed bundles for selected feeds: none"
+    if bundles:
+        names = ", ".join(name for name, _ in bundles)
+        newest = max(date for _, date in bundles)
+        summary = (f"Installed bundles for selected feeds: {names}; "
+                   f"latest metadata: {_date_label(newest)}")
+    return rows, summary
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -78,19 +105,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
     elif args.data_version:
         with CVEdb.open(args.database) as db:
-            rows = [["Feed", "Last Modified", "Last Checked", "# CVEs"]]
-            for feed in db.feeds:
-                lm: Union[Optional[datetime], str] = feed.last_modified()
-                if lm is None:
-                    lm = "never"
-                else:
-                    lm = lm.strftime("%Y-%m-%d")
-                lc: Union[Optional[datetime], str] = feed.last_checked()
-                if lc is None:
-                    lc = "never"
-                else:
-                    lc = lc.strftime("%Y-%m-%d")
-                rows.append([feed.name, lm, lc, str(len(feed.data()))])
+            rows, summary = _data_version_table(db)
+            sys.stdout.write(summary + "\n")
             num_cols = len(rows[0])
             col_widths = [max(len(row[i]) for row in rows) for i in range(num_cols)]
             total_width = sum(col_widths) + num_cols + 1
