@@ -636,9 +636,23 @@ class VersionRange(Testable):
         include_start: bool = True,
         include_end: bool = True,
     ) -> None:
+        """Initialize a range with canonical absent bounds and preserved flags.
+
+        Empty strings mean an absent bound. Literal backslash escapes and vendor
+        formats are preserved; ordering rules are applied only when matching.
+
+        Raises:
+            ValueError: A bound contains CR or LF, which cannot be represented in
+                the newline-delimited serialization format.
+        """
+        for name, bound in (("start", start), ("end", end)):
+            if bound is not None and ("\r" in bound or "\n" in bound):
+                raise ValueError(
+                    f"Invalid {name} version bound {bound!r}: CR/LF characters are not allowed"
+                )
         self.wrapped = wrapped
-        self.start = start
-        self.end = end
+        self.start = start or None
+        self.end = end or None
         self.include_start = include_start
         self.include_end = include_end
 
