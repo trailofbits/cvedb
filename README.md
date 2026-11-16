@@ -32,6 +32,12 @@ $ pip3 install cvedb
 $ cvedb --help
 ```
 
+Descriptions use English when available, then the first available language, or
+`No description available` when none are present. CVE text escapes terminal control
+characters, including embedded newlines and tabs, as visible sequences such as `\n`
+and `\x1b`. Plain output keeps one tab-separated record per line. Styled output
+wraps long text to the terminal width, with a minimum box width of four columns.
+
 ## Python Examples
 
 ```python
