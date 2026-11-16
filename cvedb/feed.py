@@ -1,8 +1,8 @@
 from abc import ABC, abstractmethod
-from collections.abc import Hashable, Iterable as IterableABC, Sized
+from collections.abc import Callable, Hashable, Iterable, Iterator, Sized
 from datetime import datetime
 import time
-from typing import Any, Callable, Dict, FrozenSet, Iterable, Iterator, Optional, Tuple, Union
+from typing import Any
 
 from cvedb.cve import CVE
 from cvedb.dates import utc_datetime
@@ -11,7 +11,7 @@ from cvedb.search import OrQuery, SearchQuery, Sort, TermQuery
 MAX_DATA_AGE_SECONDS: int = 86400  # 1 day
 
 
-IterableCVE = IterableABC[CVE]
+IterableCVE = Iterable[CVE]
 
 
 class DataSource(ABC, Hashable, IterableCVE):
@@ -24,7 +24,7 @@ class DataSource(ABC, Hashable, IterableCVE):
     def __init__(self, last_modified_date: datetime | None):
         self.last_modified_date: datetime | None = last_modified_date
 
-    def __eq__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def __eq__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, other
     ):
         return isinstance(other, DataSource) and self.last_modified_date == other.last_modified_date
@@ -39,7 +39,7 @@ class DataSource(ABC, Hashable, IterableCVE):
             raise TypeError("Cannot order data sources without last-modified timestamps")
         return utc_datetime(self.last_modified_date) < utc_datetime(other.last_modified_date)
 
-    def __hash__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def __hash__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ):
         return hash(self.last_modified_date)
@@ -47,7 +47,7 @@ class DataSource(ABC, Hashable, IterableCVE):
 
 class Data(DataSource, Sized, ABC):
     @staticmethod
-    def make_query(*queries: Union[str, SearchQuery]) -> SearchQuery:
+    def make_query(*queries: str | SearchQuery) -> SearchQuery:
         sq = []
         for query in queries:
             if isinstance(query, SearchQuery):
@@ -60,7 +60,7 @@ class Data(DataSource, Sized, ABC):
             return OrQuery(*sq)
 
     @staticmethod
-    def sort_key(*sorts: Sort) -> Callable[[CVE], Tuple[Any, ...]]:
+    def sort_key(*sorts: Sort) -> Callable[[CVE], tuple[Any, ...]]:
         def get_key(cve: CVE):
             return tuple(sort.get_key(cve) for sort in sorts) + ((cve.cve_id,) if sorts else ())
 
@@ -68,7 +68,7 @@ class Data(DataSource, Sized, ABC):
 
     def search(
         self,
-        *queries: Union[str, SearchQuery],
+        *queries: str | SearchQuery,
         sort: Iterable[Sort] = (Sort.CVE_ID,),
         ascending: bool = True,
     ) -> Iterator[CVE]:
@@ -81,38 +81,38 @@ class Data(DataSource, Sized, ABC):
 class InMemoryData(Data):
     def __init__(self, last_modified_date: datetime | None, cves: Iterable[CVE]):
         super().__init__(last_modified_date)
-        self.cves: FrozenSet[CVE] = frozenset(cves)
+        self.cves: frozenset[CVE] = frozenset(cves)
 
     @staticmethod
     def load(source: DataSource) -> "Data":
         return InMemoryData(source.last_modified_date, source)
 
-    def __iter__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def __iter__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> Iterator[CVE]:
         return iter(self.cves)
 
-    def __len__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def __len__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ):
         return len(self.cves)
 
 
-FEEDS: Dict[str, "Feed"] = {}
+FEEDS: dict[str, "Feed"] = {}
 
 
 class Feed(ABC):
     register: bool = True
 
-    def __init__(self, name: str, initial_data: Optional[Data] = None):
+    def __init__(self, name: str, initial_data: Data | None = None):
         self.name: str = name
-        self._data: Optional[Data] = initial_data
+        self._data: Data | None = initial_data
         if self.register:
             if self.name in FEEDS:
                 raise ValueError(f"A feed named {self.name} is already registered!")
             FEEDS[self.name] = self
 
-    def last_modified(self) -> Optional[datetime]:
+    def last_modified(self) -> datetime | None:
         if self._data is not None:
             return self._data.last_modified_date
         else:
@@ -152,5 +152,5 @@ class Feed(ABC):
         return self._data
 
     @abstractmethod
-    def reload(self, existing_data: Optional[Data] = None) -> DataSource:
+    def reload(self, existing_data: Data | None = None) -> DataSource:
         pass

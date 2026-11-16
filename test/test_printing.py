@@ -1,6 +1,6 @@
 """Behavior tests for safe, width-aware CVE output."""
 
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from io import BytesIO, StringIO
 from os import terminal_size
 from unittest import TestCase
@@ -10,7 +10,7 @@ from cvedb.cve import CVE, Description, Reference
 from cvedb.printing import ansi_len, print_cve_notty, print_cve_tty, print_cves, strip_ansi
 
 
-NOW = datetime(2020, 1, 2, tzinfo=timezone.utc)
+NOW = datetime(2020, 1, 2, tzinfo=UTC)
 
 
 def record(

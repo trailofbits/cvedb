@@ -92,7 +92,7 @@ class Part(Enum):
     OS = "o"
     APP = "a"
 
-    def __str__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def __str__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> str:
         return self.value
@@ -102,7 +102,7 @@ class Logical(Enum):
     ANY = "*"
     NA = "-"
 
-    def __str__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def __str__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> str:
         return self.value
@@ -128,14 +128,14 @@ class Language:
         self.code = iso_639_code.lower()
         self.region = _language_region(region)
 
-    def __eq__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def __eq__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, other: object
     ) -> bool:
         if isinstance(other, Language):
             return self.code == other.code and self.region == other.region
         return isinstance(other, str) and str(self) == other
 
-    def __hash__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def __hash__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> int:
         return hash(str(self))
@@ -143,7 +143,7 @@ class Language:
     def __lt__(self, other: "Language | str") -> bool:
         return str(self) < str(other)
 
-    def __str__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def __str__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> str:
         if self.region is None:
@@ -152,7 +152,7 @@ class Language:
             return f"{self.code}-{self.region:03}"
         return f"{self.code}-{self.region}"
 
-    def __repr__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def __repr__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> str:
         return f"{self.__class__.__name__}(iso_639_code={self.code!r}, region={self.region!r})"
@@ -251,7 +251,7 @@ class CPE(Testable):
     def _match(source: AttributeValue, target: AttributeValue) -> bool:
         return _match_attribute(source, target)
 
-    def match(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def match(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, cpe: "CPE", match_version: bool = True
     ) -> bool:
         """Compare this source criterion with a target name or unconstrained filter.
@@ -275,14 +275,14 @@ class CPE(Testable):
 
     __str__ = formatted_string
 
-    def dump_content(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def dump_content(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, stream: TextIO
     ) -> None:
         stream.write(self.formatted_string())
         stream.write("\n")
 
     @classmethod
-    def load_content(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def load_content(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         cls, stream: TextIO
     ) -> "CPE":
         line = stream.readline()
@@ -290,7 +290,7 @@ class CPE(Testable):
             line = line[:-1].removesuffix("\r")
         return parse_formatted_string(line)
 
-    def vulnerable_cpes(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def vulnerable_cpes(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> Iterator["CPE"]:
         yield self
@@ -448,7 +448,7 @@ class LogicalTest(Testable, ABC):
         self.children = tuple(children)
         self.negate = negate
 
-    def __eq__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def __eq__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, other: object
     ) -> bool:
         return (
@@ -458,13 +458,13 @@ class LogicalTest(Testable, ABC):
             and other.children == self.children
         )
 
-    def __hash__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def __hash__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> int:
         return hash((self.negate,) + self.children)
 
     @classmethod
-    def load_content(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def load_content(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         cls, stream: TextIO
     ) -> "LogicalTest":
         negate = stream.read(1) == "~"
@@ -472,7 +472,7 @@ class LogicalTest(Testable, ABC):
         children = [Testable.load(stream) for _ in range(num_children)]
         return cls(children, negate)
 
-    def dump_content(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def dump_content(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, stream: TextIO
     ) -> None:
         stream.write("~" if self.negate else "=")
@@ -480,13 +480,13 @@ class LogicalTest(Testable, ABC):
         for child in self.children:
             child.dump(stream)
 
-    def candidate_criteria(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def candidate_criteria(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> Iterator[Testable]:
         for child in self.children:
             yield from child.candidate_criteria()
 
-    def vulnerable_cpes(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def vulnerable_cpes(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> Iterator[CPE]:
         if not self.negate:
@@ -497,13 +497,13 @@ class LogicalTest(Testable, ABC):
 class And(LogicalTest):
     uid = "a"
 
-    def match(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def match(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, cpe: CPE
     ) -> bool:
         result = all(child.match(cpe) for child in self.children)
         return not result if self.negate else result
 
-    def match_inventory(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def match_inventory(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, inventory: Iterable[CPE]
     ) -> bool:
         inventory = tuple(inventory)
@@ -514,13 +514,13 @@ class And(LogicalTest):
 class Or(LogicalTest):
     uid = "o"
 
-    def match(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def match(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, cpe: CPE
     ) -> bool:
         result = any(child.match(cpe) for child in self.children)
         return not result if self.negate else result
 
-    def match_inventory(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def match_inventory(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, inventory: Iterable[CPE]
     ) -> bool:
         inventory = tuple(inventory)
@@ -534,43 +534,43 @@ class Negate(Testable):
     def __init__(self, wrapped: Testable) -> None:
         self.wrapped = wrapped
 
-    def __eq__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def __eq__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, other: object
     ) -> bool:
         return isinstance(other, Negate) and self.wrapped == other.wrapped
 
-    def __hash__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def __hash__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> int:
         return hash(self.wrapped)
 
-    def match(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def match(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, cpe: CPE
     ) -> bool:
         return not self.wrapped.match(cpe)
 
-    def match_inventory(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def match_inventory(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, inventory: Iterable[CPE]
     ) -> bool:
         return not self.wrapped.match_inventory(tuple(inventory))
 
-    def candidate_criteria(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def candidate_criteria(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> Iterator[Testable]:
         yield from self.wrapped.candidate_criteria()
 
-    def dump_content(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def dump_content(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, stream: TextIO
     ) -> None:
         self.wrapped.dump(stream)
 
     @classmethod
-    def load_content(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def load_content(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         cls, stream: TextIO
     ) -> "Negate":
         return cls(Testable.load(stream))
 
-    def vulnerable_cpes(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def vulnerable_cpes(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> Iterator[CPE]:
         return iter(())
@@ -656,7 +656,7 @@ class VersionRange(Testable):
         self.include_start = include_start
         self.include_end = include_end
 
-    def __eq__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def __eq__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, other: object
     ) -> bool:
         return (
@@ -668,12 +668,12 @@ class VersionRange(Testable):
             and self.wrapped == other.wrapped
         )
 
-    def __hash__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def __hash__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> int:
         return hash((self.wrapped, self.start, self.end, self.include_start, self.include_end))
 
-    def match(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def match(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, cpe: CPE
     ) -> bool:
         """Match a numeric or recognized prerelease against both range boundaries.
@@ -696,7 +696,7 @@ class VersionRange(Testable):
                     return False
         return True
 
-    def dump_content(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def dump_content(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, stream: TextIO
     ) -> None:
         for bound, inclusive in ((self.start, self.include_start), (self.end, self.include_end)):
@@ -707,7 +707,7 @@ class VersionRange(Testable):
         self.wrapped.dump(stream)
 
     @classmethod
-    def load_content(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def load_content(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         cls, stream: TextIO
     ) -> "VersionRange":
         include_start, start = _load_bound(stream)
@@ -717,7 +717,7 @@ class VersionRange(Testable):
             raise ValueError("A serialized version range must wrap a CPE name")
         return cls(wrapped, start, end, include_start, include_end)
 
-    def vulnerable_cpes(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def vulnerable_cpes(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> Iterator[CPE]:
         yield from self.wrapped.vulnerable_cpes()
@@ -735,31 +735,31 @@ class CPEMatch(Testable):
     criterion: CPE | VersionRange
     vulnerable: bool = True
 
-    def match(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def match(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, cpe: CPE
     ) -> bool:
         return self.criterion.match(cpe)
 
-    def candidate_criteria(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def candidate_criteria(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> Iterator[Testable]:
         if self.vulnerable:
             yield self.criterion
 
-    def vulnerable_cpes(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def vulnerable_cpes(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> Iterator[CPE]:
         if self.vulnerable:
             yield from self.criterion.vulnerable_cpes()
 
-    def dump_content(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def dump_content(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, stream: TextIO
     ) -> None:
         stream.write("1" if self.vulnerable else "0")
         self.criterion.dump(stream)
 
     @classmethod
-    def load_content(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def load_content(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         cls, stream: TextIO
     ) -> "CPEMatch":
         flag = stream.read(1)

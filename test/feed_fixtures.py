@@ -2,7 +2,7 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from gzip import compress
 from hashlib import sha256
 from io import BytesIO
@@ -12,7 +12,7 @@ from urllib.request import Request
 
 from cvedb.nvd import JsonFeed, Meta
 
-NOW = datetime(2020, 1, 2, tzinfo=timezone.utc)
+NOW = datetime(2020, 1, 2, tzinfo=UTC)
 
 
 @dataclass(frozen=True)

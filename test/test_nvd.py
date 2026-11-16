@@ -1,5 +1,5 @@
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from typing import Any
 from unittest.mock import patch
 
@@ -11,7 +11,7 @@ from cvedb.feed import FEEDS
 from cvedb.nvd import JsonDataSource, Meta
 
 TIMESTAMP = "2026-01-01T09:15:51.113Z"
-EXPECTED_TIMESTAMP = datetime(2026, 1, 1, 9, 15, 51, 113000, tzinfo=timezone.utc)
+EXPECTED_TIMESTAMP = datetime(2026, 1, 1, 9, 15, 51, 113000, tzinfo=UTC)
 CRITERIA = "cpe:2.3:a:example:widget:*:*:*:*:*:*:*:*"
 VECTOR_V3 = "AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
 VECTOR_V2 = "AV:N/AC:L/Au:N/C:C/I:C/A:C"
@@ -109,13 +109,13 @@ def test_schema_two_timestamps_are_utc_and_preserve_offsets(timestamp: str) -> N
     feed = _feed()
     feed["timestamp"] = timestamp
     _record(feed)["published"] = timestamp
-    expected = datetime(2026, 1, 1, 9, 15, 51, 113000, tzinfo=timezone.utc)
+    expected = datetime(2026, 1, 1, 9, 15, 51, 113000, tzinfo=UTC)
     assert _load(feed).published_date == expected
     assert JsonDataSource.load(feed).last_modified_date == expected
 
 
 def test_empty_schema_two_feed_and_supplied_metadata() -> None:
-    meta = Meta(datetime(2026, 1, 1, tzinfo=timezone.utc), 0, 0, 0, b"")
+    meta = Meta(datetime(2026, 1, 1, tzinfo=UTC), 0, 0, 0, b"")
     source = JsonDataSource.load({"vulnerabilities": []}, meta)
     assert len(source) == 0
     assert source.meta is meta

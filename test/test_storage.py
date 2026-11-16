@@ -1,6 +1,6 @@
 from contextlib import closing
 from dataclasses import replace
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, UTC
 from pathlib import Path
 import sqlite3
 from collections.abc import Iterator
@@ -14,7 +14,7 @@ from cvedb.feed import Feed, InMemoryData, Data, DataSource
 from cvedb.schemas import Schema
 from cvedb.search import CPEQuery
 
-NOW = datetime(2026, 1, 1, 9, 15, 51, 113000, tzinfo=timezone.utc)
+NOW = datetime(2026, 1, 1, 9, 15, 51, 113000, tzinfo=UTC)
 FULL_CPE = CPE(
     Part.APP,
     "acme",
@@ -191,7 +191,7 @@ class _LocalFeed(Feed):
         super().__init__("test")
         self.record = record
 
-    def reload(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def reload(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, existing_data: Data | None = None
     ) -> DataSource:
         return InMemoryData(NOW, [self.record])
@@ -297,7 +297,7 @@ class _OrderedSource(DataSource):
         super().__init__(timestamp)
         self.records = records
 
-    def __iter__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def __iter__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> Iterator[CVE]:
         return iter(self.records)
@@ -310,7 +310,7 @@ class _MutableFeed(Feed):
         super().__init__("mutable")
         self.source = _OrderedSource(records, NOW)
 
-    def reload(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def reload(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, existing_data: Data | None = None
     ) -> DataSource:
         return self.source

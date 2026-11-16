@@ -3,7 +3,7 @@
 from collections.abc import Generator, Iterable
 from contextlib import closing
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from io import StringIO
 from pathlib import Path
 import sqlite3
@@ -21,7 +21,7 @@ from cvedb.schemas import Schema
 from cvedb.search import SearchQuery, Sort, TermQuery
 from cvedb.sql import Select
 
-NOW = datetime(2020, 1, 2, tzinfo=timezone.utc)
+NOW = datetime(2020, 1, 2, tzinfo=UTC)
 SORTS = {
     "cve": Sort.CVE_ID,
     "modified": Sort.LAST_MODIFIED_DATE,
@@ -50,7 +50,7 @@ class _Feed(Feed):
         self.calls = 0
         self.error: BaseException | None = None
 
-    def reload(  # ty: ignore[missing-override-decorator]  # Python 3.10 lacks override.
+    def reload(  # ty: ignore[missing-override-decorator]  # Python 3.11 lacks override.
         self, existing_data: Data | None = None
     ) -> DataSource:
         self.calls += 1

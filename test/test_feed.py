@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional, Iterator
+from collections.abc import Iterator
 from unittest import TestCase
 
 from cvedb.cve import CVE
@@ -10,17 +10,13 @@ class TestFeed(TestCase):
     def test_custom_feed(self):
         class CustomDataSource(DataSource):
             def __iter__(self) -> Iterator[CVE]:
-                yield CVE(
-                    "FAKE_CVE",
-                    datetime.now(),
-                    datetime.now()
-                )
+                yield CVE("FAKE_CVE", datetime.now(), datetime.now())
 
         class CustomFeed(Feed):
             def __init__(self):
                 super().__init__(name="custom")
 
-            def reload(self, existing_data: Optional[Data] = None) -> DataSource:
+            def reload(self, existing_data: Data | None = None) -> DataSource:
                 return CustomDataSource(datetime.now())
 
         feed = CustomFeed()

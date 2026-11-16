@@ -1,11 +1,19 @@
 from random import choice, randint
-from typing import Callable, TypeVar, Union
+from collections.abc import Callable
+from typing import TypeVar
 from unittest import TestCase
 
 from rstr import xeger
 
 from cvedb.cpe import (
-    AV_STRING_REGEX, CPE, FormattedStringParser, LANGTAG_REGEX, Language, Logical, parse_formatted_string, Part
+    AV_STRING_REGEX,
+    CPE,
+    FormattedStringParser,
+    LANGTAG_REGEX,
+    Language,
+    Logical,
+    parse_formatted_string,
+    Part,
 )
 from cvedb.cve import Configurations
 
@@ -28,7 +36,7 @@ def random_language() -> Language:
 T = TypeVar("T")
 
 
-def random_logical_or(gen: Callable[[], T] = random_avstring) -> Union[Logical, T]:
+def random_logical_or(gen: Callable[[], T] = random_avstring) -> Logical | T:
     r = randint(0, 2)
     if r == 0:
         return Logical.ANY
@@ -52,13 +60,15 @@ def random_cpe() -> CPE:
         sw_edition=random_logical_or(),
         target_sw=random_logical_or(),
         target_hw=random_logical_or(),
-        other=random_logical_or()
+        other=random_logical_or(),
     )
 
 
 class TestCPE(TestCase):
     def test_parse(self):
-        cpe = parse_formatted_string("cpe:2.3:a:kamadak-exif_project:kamadak-exif:0.5.2:*:*:*:*:rust:*:*")
+        cpe = parse_formatted_string(
+            "cpe:2.3:a:kamadak-exif_project:kamadak-exif:0.5.2:*:*:*:*:rust:*:*"
+        )
         self.assertEqual(cpe.part, Part.APP)
         self.assertEqual(cpe.vendor, "kamadak-exif_project")
         self.assertEqual(cpe.product, "kamadak-exif")
@@ -70,21 +80,27 @@ class TestCPE(TestCase):
         self.assertEqual(cpe.target_sw, "rust")
         self.assertEqual(cpe.target_hw, Logical.ANY)
         self.assertEqual(cpe.other, Logical.ANY)
-        
+
     def test_configurations_serialization(self):
         r"""Regression test from https://nvd.nist.gov/vuln/detail/CVE-2012-1093
 
-            C1
-            o=4
-            vI
-            E1\:7.6\+12
-            ccpe:2.3:a:debian:x11-common:*:*:*:*:*:*:*:*
-            ccpe:2.3:o:debian:debian_linux:8.0:*:*:*:*:*:*:*
-            ccpe:2.3:o:debian:debian_linux:9.0:*:*:*:*:*:*:*
-            ccpe:2.3:o:debian:debian_linux:10.0:*:*:*:*:*:*:*
+        C1
+        o=4
+        vI
+        E1\:7.6\+12
+        ccpe:2.3:a:debian:x11-common:*:*:*:*:*:*:*:*
+        ccpe:2.3:o:debian:debian_linux:8.0:*:*:*:*:*:*:*
+        ccpe:2.3:o:debian:debian_linux:9.0:*:*:*:*:*:*:*
+        ccpe:2.3:o:debian:debian_linux:10.0:*:*:*:*:*:*:*
 
         """
-        raw = 'C1\no=4\nvI\nE1\\:7.6\\+12\nccpe:2.3:a:debian:x11-common:*:*:*:*:*:*:*:*\nccpe:2.3:o:debian:debian_linux:8.0:*:*:*:*:*:*:*\nccpe:2.3:o:debian:debian_linux:9.0:*:*:*:*:*:*:*\nccpe:2.3:o:debian:debian_linux:10.0:*:*:*:*:*:*:*\n'
+        raw = (
+            "C1\no=4\nvI\nE1\\:7.6\\+12\n"
+            "ccpe:2.3:a:debian:x11-common:*:*:*:*:*:*:*:*\n"
+            "ccpe:2.3:o:debian:debian_linux:8.0:*:*:*:*:*:*:*\n"
+            "ccpe:2.3:o:debian:debian_linux:9.0:*:*:*:*:*:*:*\n"
+            "ccpe:2.3:o:debian:debian_linux:10.0:*:*:*:*:*:*:*\n"
+        )
         cfg = Configurations.loads(raw)
         self.assertEqual(cfg.dumps(), raw)
         self.assertEqual(cfg, Configurations.loads(cfg.dumps()))

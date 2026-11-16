@@ -2,7 +2,7 @@
 
 from collections.abc import Generator, Iterable, Iterator
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 from sqlite3 import connect, Connection, ProgrammingError
 import sys
@@ -48,7 +48,7 @@ class CVEdbDataSource(Data):
         self.schema = source.schema
         self.feeds = source.feeds if isinstance(source, CVEdb) else [source]
 
-    def __iter__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def __iter__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> Iterator[CVE]:
         if not self.feeds:
@@ -71,7 +71,7 @@ class CVEdbDataSource(Data):
                 else:
                     raise
 
-    def __len__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def __len__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> int:
         if not self.feeds:
@@ -97,7 +97,7 @@ class DbBackedFeed(Feed):
         self.feed_id = self.schema.feed_id(parent.name)
         self._initial_loaded = False
 
-    def last_modified(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def last_modified(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> datetime | None:
         return self._date("last_modified")
@@ -110,18 +110,16 @@ class DbBackedFeed(Feed):
         row = self.connection.execute(
             f"SELECT {column} FROM feeds WHERE id = ?", (self.feed_id,)
         ).fetchone()
-        return (
-            None if row is None or row[0] is None else datetime.fromtimestamp(row[0], timezone.utc)
-        )
+        return None if row is None or row[0] is None else datetime.fromtimestamp(row[0], UTC)
 
-    def is_out_of_date(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def is_out_of_date(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> bool:
         """Read whether another upstream check is due without changing metadata."""
         checked = self.last_checked()
         return checked is None or time() - checked.timestamp() >= UPDATE_INTERVAL_SECONDS
 
-    def _load_initial(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def _load_initial(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> CVEdbDataSource:
         if not self._initial_loaded:
@@ -160,7 +158,7 @@ class DbBackedFeed(Feed):
             "UPDATE feeds SET last_checked=? WHERE id=?", (checked_at, self.feed_id)
         )
 
-    def reload(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def reload(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, existing_data: Data | None = None, force: bool = False
     ) -> CVEdbDataSource:
         """Refresh upstream data when due, or unconditionally when force is True.
@@ -191,7 +189,7 @@ class DbBackedFeed(Feed):
             self._mark_checked(time())
         return CVEdbDataSource(self)
 
-    def data(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def data(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, force_reload: bool = False
     ) -> "CVEdbData":
         """Return a lazy persisted view; force_reload explicitly refreshes upstream."""
@@ -277,19 +275,19 @@ class CVEdbData(CVEdbDataSource):
     def _ensure_initial(self) -> None:
         self.last_modified_date = self._source._load_initial().last_modified_date
 
-    def __iter__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def __iter__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> Iterator[CVE]:
         self._ensure_initial()
         return super().__iter__()
 
-    def __len__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def __len__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> int:
         self._ensure_initial()
         return super().__len__()
 
-    def search(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def search(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
         *queries: str | SearchQuery,
         sort: Iterable[Sort] = (Sort.CVE_ID,),
@@ -322,21 +320,21 @@ class CVEdb(Feed):
         parents = FEEDS.values() if parents is None else parents
         self.feeds = [DbBackedFeed(connection, parent, schema=self.schema) for parent in parents]
 
-    def last_modified(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def last_modified(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> datetime | None:
         """Return the newest known persisted feed timestamp, or None."""
         dates = [feed.last_modified() for feed in self.feeds]
         return max((value for value in dates if value is not None), default=None)
 
-    def _load_initial(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def _load_initial(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
     ) -> CVEdbDataSource:
         for feed in self.feeds:
             feed._load_initial()
         return CVEdbDataSource(self)
 
-    def data(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def data(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, force_reload: bool = False
     ) -> CVEdbData:
         """Return a lazy local view; force_reload explicitly checks every upstream feed."""
@@ -344,7 +342,7 @@ class CVEdb(Feed):
             self.reload(force=True)
         return CVEdbData(self)
 
-    def reload(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+    def reload(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self, existing_data: Data | None = None, force: bool = False
     ) -> CVEdbDataSource:
         """Atomically refresh due feeds, bypassing throttling when force is True.

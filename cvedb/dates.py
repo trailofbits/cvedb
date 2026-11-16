@@ -1,7 +1,7 @@
 """UTC instant and CLI date-boundary policies."""
 
 import argparse
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 import re
 from typing import cast
 
@@ -13,8 +13,8 @@ _DATE_ONLY = re.compile(r"[0-9]{4}(?:-[0-9]{2}(?:-[0-9]{2})?|[0-9]{4}|-?W[0-9]{2
 def utc_datetime(value: datetime) -> datetime:
     """Return an aware UTC instant, interpreting a naive value as UTC."""
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def parse_date(value: str) -> datetime:

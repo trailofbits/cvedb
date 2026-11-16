@@ -3,7 +3,7 @@
 from collections.abc import Iterator
 from contextlib import closing
 from dataclasses import replace
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from gzip import compress
 from hashlib import sha256
 from io import BytesIO
@@ -20,7 +20,7 @@ from cvedb.db import CVEdb, CVEdbDataSource, UPDATE_INTERVAL_SECONDS
 from cvedb.feed import Data, DataSource, Feed, InMemoryData
 from cvedb.nvd import JsonFeed
 
-NOW = datetime(2020, 1, 2, tzinfo=timezone.utc)
+NOW = datetime(2020, 1, 2, tzinfo=UTC)
 LATER = NOW + timedelta(days=1)
 
 
@@ -34,7 +34,7 @@ class _OrderedSource(DataSource):
         self.records = records
         self.fail = fail
 
-    def __iter__(  # ty: ignore[missing-override-decorator]  # Python 3.10 lacks override.
+    def __iter__(  # ty: ignore[missing-override-decorator]  # Python 3.11 lacks override.
         self,
     ) -> Iterator[CVE]:
         for index, record in enumerate(self.records):
@@ -54,7 +54,7 @@ class _MutableFeed(Feed):
         self.error: Exception | None = None
         self.unchanged = False
 
-    def reload(  # ty: ignore[missing-override-decorator]  # Python 3.10 lacks override.
+    def reload(  # ty: ignore[missing-override-decorator]  # Python 3.11 lacks override.
         self, existing_data: Data | None = None
     ) -> DataSource:
         self.calls += 1
@@ -153,7 +153,7 @@ def test_confirmed_unchanged_response_advances_only_checked_time() -> None:
             source = db.reload(force=True)
         assert list(source) == [_record()]
         assert source.last_modified_date == NOW
-        assert db.feeds[0].last_checked() == datetime.fromtimestamp(100000.5, timezone.utc)
+        assert db.feeds[0].last_checked() == datetime.fromtimestamp(100000.5, UTC)
         assert len(parent.seen) == 1
         assert isinstance(parent.seen[0], Data)
         assert not isinstance(parent.seen[0], type(db.data()))

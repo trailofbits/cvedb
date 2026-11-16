@@ -2,7 +2,7 @@
 
 from collections.abc import Generator, Iterable, Mapping, Sequence
 from contextlib import closing
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 import gc
 from pathlib import Path
 import sqlite3
@@ -17,7 +17,7 @@ from cvedb.db import CVEdb
 from cvedb.feed import Data, DataSource, Feed, InMemoryData
 from cvedb.schemas import Schema
 
-NOW = datetime(2020, 1, 2, tzinfo=timezone.utc)
+NOW = datetime(2020, 1, 2, tzinfo=UTC)
 
 
 class _Feed(Feed):
@@ -26,7 +26,7 @@ class _Feed(Feed):
     def __init__(self) -> None:
         super().__init__("contexts", InMemoryData(NOW, ()))
 
-    def reload(  # ty: ignore[missing-override-decorator]  # Python 3.10 lacks override.
+    def reload(  # ty: ignore[missing-override-decorator]  # Python 3.11 lacks override.
         self, existing_data: Data | None = None
     ) -> DataSource:
         return InMemoryData(NOW, ())
@@ -233,7 +233,7 @@ def test_iterator_reads_after_owned_connection_closes_still_fail(
 
 
 class _CloseFailureCursor(sqlite3.Cursor):
-    def close(  # ty: ignore[missing-override-decorator]  # Python 3.10 lacks override.
+    def close(  # ty: ignore[missing-override-decorator]  # Python 3.11 lacks override.
         self,
     ) -> None:
         failure = cast(_CloseFailureConnection, self.connection).close_error
@@ -245,7 +245,7 @@ class _CloseFailureCursor(sqlite3.Cursor):
 class _CloseFailureConnection(sqlite3.Connection):
     close_error: type[sqlite3.Error] | None = None
 
-    def execute(  # ty: ignore[missing-override-decorator]  # Python 3.10 lacks override.
+    def execute(  # ty: ignore[missing-override-decorator]  # Python 3.11 lacks override.
         self, sql: str, parameters: object = ()
     ) -> sqlite3.Cursor:
         values = cast(Sequence[object] | Mapping[str, object], parameters)
