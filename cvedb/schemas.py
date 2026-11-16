@@ -138,7 +138,18 @@ class Schema:
 
     def __init__(self, connection: Connection) -> None:
         self.connection = connection
-        connection.create_function("cvedb_contains", 3, _sql_contains, deterministic=True)
+        functions = connection.execute("PRAGMA function_list")
+        try:
+            signatures = functions.fetchall()
+            columns = [column[0] for column in functions.description or ()]
+        finally:
+            functions.close()
+        self._sql_search_available = bool(signatures)
+        if not self._sql_search_available:
+            return
+        name, arity = columns.index("name"), columns.index("narg")
+        if not any(row[name] == "cvedb_contains" and row[arity] == 3 for row in signatures):
+            connection.create_function("cvedb_contains", 3, _sql_contains, deterministic=True)
 
     def path(self) -> str:
         """Return the connection's main database filename."""
@@ -384,9 +395,16 @@ class Schema:
     ) -> Iterator[CVE]:
         """Prepare SQL eagerly and return a lazy iterator of fully matched records.
 
+        SQLite builds without function introspection use the in-memory query
+        path without registering a function that cannot be inspected safely.
+
         Raises:
-            UnsupportedQueryError: The query needs in-memory evaluation instead.
+            UnsupportedQueryError: The query or SQLite build needs in-memory evaluation.
         """
+        if not self._sql_search_available:
+            raise UnsupportedQueryError(
+                "This SQLite build lacks function introspection; evaluate the query in memory"
+            )
         query = Data.make_query(*queries)
         select = self.to_query(query)
         if select is None:
