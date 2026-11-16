@@ -36,6 +36,7 @@ cvedb = "cvedb.__main__:main"
 dev = [
     "actionlint-py==1.7.12.25",
     "hypothesis==6.170.15",
+    "pip-audit==2.10.1",
     "prek==0.5.10",
     "pytest==9.2.0",
     "rstr==3.2.2",

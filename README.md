@@ -42,6 +42,7 @@ uv run --frozen pytest -q
 uv run --frozen ty check --error-on-warning cvedb test scripts
 uv run --frozen prek run --all-files
 uv run --frozen python -m scripts.check_dist
+uv run --frozen python -m scripts.audit_dependencies
 ```
 
 The development group pins Ruff, ty, test tools, and the cross-platform wrappers
@@ -61,6 +62,14 @@ When updating dependencies, check current stable releases, respect the configure
 seven-day maturity policy, update the exact pins, and regenerate `uv.lock` with
 `uv lock`. The uv, uv_build, Ruff, ty, and prek versions selected for this migration
 are the newest stable releases eligible under that policy on November 16, 2026.
+
+Dependabot checks Python dependencies and GitHub Actions weekly, groups updates,
+and waits seven days before proposing version updates. Security updates bypass
+the version-update cooldown. CI audits the full locked runtime and development
+dependency set on Python 3.11–3.15. The audit checks
+lockfile freshness and uses a temporary hashed export; it fails on known
+vulnerabilities, skipped dependencies, or advisory-service errors. Run the audit
+command above when you change dependencies. It requires network access to PyPI.
 
 ## Command Line Usage
 

@@ -31,6 +31,8 @@ jobs:
         run: |
           uv lock --check
           uv sync --frozen
+      - name: Audit locked dependencies
+        run: uv run --frozen python -m scripts.audit_dependencies
       - name: Run offline tests with warnings as errors
         run: uv run --frozen pytest -q
 

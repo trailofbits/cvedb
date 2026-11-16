@@ -28,7 +28,12 @@ uv run --frozen pytest -q test/test_cpe.py
 uv run --frozen python -m cvedb --help
 uv run --frozen prek run --all-files
 uv run --frozen python -m scripts.check_dist
+uv run --frozen python -m scripts.audit_dependencies
 ```
+
+The dependency audit checks all locked runtime and development groups for the active
+Python version and fails on vulnerabilities, skipped dependencies, or service errors.
+CI runs it for every supported Python version; it requires PyPI network access.
 
 Use uv 0.13.7. Frozen sync installs the package and pinned development group in `.venv`.
 Prek reproduces CI's blocking lint, formatting, typing, test, shell, and workflow checks.
