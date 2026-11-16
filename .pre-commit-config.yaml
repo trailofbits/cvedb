@@ -1,8 +1,8 @@
 files: >-
   (?x)^(
-    cvedb/(cpe|cve|nvd|schemas|search|sql|dates|db|feed)\.py
+    cvedb/(cpe|cve|nvd|schemas|search|sql|dates|db|feed|cli|__main__)\.py
     |test/test_(cpe_matching|applicability|storage|nvd|search|search_dates
-    |updates|contexts|feeds|transport)\.py
+    |updates|contexts|feeds|transport|cli)\.py
     |test/feed_fixtures\.py
   )$
 repos:

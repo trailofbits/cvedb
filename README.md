@@ -271,3 +271,31 @@ and object/array nesting to 256 container levels. Network operations use a
 available chunks. DNS resolution follows the system resolver's timing.
 
 [nvd-feed-metadata]: https://nvd.nist.gov/vuln/data-feeds
+
+
+## CLI operations
+
+`cvedb --update` updates the selected database and exits. Sort, descending-order,
+and ANSI options alone do not request a listing after an update. Add search
+terms, a date filter, or a CPE filter to update and then query. An explicitly
+provided wildcard CPE value also requests a query:
+
+```console
+$ cvedb --update --vendor '*'
+$ cvedb alpha beta --vendor acme --sort modified --descending
+$ cvedb --update --data-version
+```
+
+Multiple search terms form an OR group; date and CPE filters combine with that
+group using AND. Listings apply sorting, descending order, and ANSI options even
+when you provide no search filters. The supported sort choices are `cve`,
+`modified`, `published`, `impact`, and `severity`. Database paths and CPE filter
+options require a value when present.
+
+Operations run in this order: update, version output, data-version output, and
+listing. Version output takes precedence over data-version output and listing;
+data-version output takes precedence over listing. A successful update commits
+before output starts, so an interrupted listing does not undo it.
+
+Successful commands return status 0. Expected operation failures, interrupted
+output, and cancellation return status 1; invalid arguments return status 2.
