@@ -39,14 +39,17 @@ uv sync --frozen --python 3.13
 uv run --frozen prek install
 uv run --frozen prek auto-update --cooldown-days 7
 uv run --frozen pytest -q
+uv run --frozen ty check --error-on-warning cvedb test scripts
 uv run --frozen prek run --all-files
 uv run --frozen python -m scripts.check_dist
 ```
 
 The development group pins Ruff, ty, test tools, and the cross-platform wrappers
-for ShellCheck, shfmt, and actionlint. Prek runs Python lint/format and correctness
-type checks, offline tests, shell checks, and workflow checks. Python warnings fail
-tests. CI applies the same checks to PRs targeting any branch, including stacked PRs.
+for ShellCheck, shfmt, and actionlint. Prek runs Python lint/format and strict ty
+checks across all source, tests, and distribution scripts, plus offline tests, shell
+checks, and workflow checks. Python warnings fail tests. CI applies the same checks
+to PRs targeting any branch, including stacked PRs. The installed package includes
+a `py.typed` marker so downstream type checkers can use its annotations.
 
 `pyproject.toml` declares the package and its exact direct dependencies. The uv build
 backend keeps the existing package layout. `uv build` builds an sdist and then a wheel

@@ -4,7 +4,7 @@ from dataclasses import dataclass, fields
 from enum import Enum
 from io import StringIO
 import re
-from typing import ClassVar, NoReturn, TextIO, cast
+from typing import ClassVar, NoReturn, Self, TextIO, cast
 
 
 AV_STRING_REGEX = re.compile(
@@ -466,7 +466,7 @@ class LogicalTest(Testable, ABC):
     @classmethod
     def load_content(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         cls, stream: TextIO
-    ) -> "LogicalTest":
+    ) -> Self:
         negate = stream.read(1) == "~"
         num_children = int(stream.readline())
         children = [Testable.load(stream) for _ in range(num_children)]
@@ -567,7 +567,7 @@ class Negate(Testable):
     @classmethod
     def load_content(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         cls, stream: TextIO
-    ) -> "Negate":
+    ) -> Self:
         return cls(Testable.load(stream))
 
     def vulnerable_cpes(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
@@ -709,7 +709,7 @@ class VersionRange(Testable):
     @classmethod
     def load_content(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         cls, stream: TextIO
-    ) -> "VersionRange":
+    ) -> Self:
         include_start, start = _load_bound(stream)
         include_end, end = _load_bound(stream)
         wrapped = Testable.load(stream)
@@ -761,7 +761,7 @@ class CPEMatch(Testable):
     @classmethod
     def load_content(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         cls, stream: TextIO
-    ) -> "CPEMatch":
+    ) -> Self:
         flag = stream.read(1)
         if flag not in ("0", "1"):
             raise ValueError(f"Invalid vulnerable criterion marker {flag!r}; expected '0' or '1'")

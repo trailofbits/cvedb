@@ -12,17 +12,11 @@ repos:
         entry: uv run --frozen ruff format --check
         types: [python]
       - id: ty
-        name: Check correctness types
+        name: Check Python types
         language: system
-        entry: uv run --frozen ty check --error-on-warning
-        files: >-
-          (?x)^(
-            cvedb/(cpe|cve|nvd|schemas|search|sql|dates|db|feed|cli|__main__)\.py
-            |test/test_(cpe_matching|applicability|storage|nvd|search|search_dates
-            |updates|contexts|feeds|transport|cli|packaging)\.py
-            |test/feed_fixtures\.py
-            |scripts/.*\.py
-          )$
+        entry: uv run --frozen ty check --error-on-warning cvedb test scripts
+        pass_filenames: false
+        files: ^(cvedb/|test/|scripts/|pyproject\.toml|uv\.lock)
       - id: pytest
         name: Run offline Python tests
         language: system

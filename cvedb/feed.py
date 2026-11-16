@@ -2,7 +2,6 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Hashable, Iterable, Iterator, Sized
 from datetime import datetime
 import time
-from typing import Any
 
 from cvedb.cve import CVE
 from cvedb.dates import utc_datetime
@@ -25,8 +24,8 @@ class DataSource(ABC, Hashable, IterableCVE):
         self.last_modified_date: datetime | None = last_modified_date
 
     def __eq__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
-        self, other
-    ):
+        self, other: object
+    ) -> bool:
         return isinstance(other, DataSource) and self.last_modified_date == other.last_modified_date
 
     def __lt__(self, other: "DataSource") -> bool:
@@ -41,7 +40,7 @@ class DataSource(ABC, Hashable, IterableCVE):
 
     def __hash__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
-    ):
+    ) -> int:
         return hash(self.last_modified_date)
 
 
@@ -60,8 +59,10 @@ class Data(DataSource, Sized, ABC):
             return OrQuery(*sq)
 
     @staticmethod
-    def sort_key(*sorts: Sort) -> Callable[[CVE], tuple[Any, ...]]:
-        def get_key(cve: CVE):
+    def sort_key(*sorts: Sort) -> Callable[[CVE], tuple[str | int | float | datetime, ...]]:
+        """Build comparable field keys, using CVE IDs to resolve ties."""
+
+        def get_key(cve: CVE) -> tuple[str | int | float | datetime, ...]:
             return tuple(sort.get_key(cve) for sort in sorts) + ((cve.cve_id,) if sorts else ())
 
         return get_key
@@ -84,7 +85,8 @@ class InMemoryData(Data):
         self.cves: frozenset[CVE] = frozenset(cves)
 
     @staticmethod
-    def load(source: DataSource) -> "Data":
+    def load(source: DataSource) -> "InMemoryData":
+        """Materialize source records while preserving their timestamp."""
         return InMemoryData(source.last_modified_date, source)
 
     def __iter__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
@@ -94,7 +96,7 @@ class InMemoryData(Data):
 
     def __len__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.11.
         self,
-    ):
+    ) -> int:
         return len(self.cves)
 
 

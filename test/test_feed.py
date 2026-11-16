@@ -9,14 +9,18 @@ from cvedb.feed import Feed, FEEDS, Data, DataSource
 class TestFeed(TestCase):
     def test_custom_feed(self):
         class CustomDataSource(DataSource):
-            def __iter__(self) -> Iterator[CVE]:
+            def __iter__(  # ty: ignore[missing-override-decorator]  # Python 3.11 lacks override.
+                self,
+            ) -> Iterator[CVE]:
                 yield CVE("FAKE_CVE", datetime.now(), datetime.now())
 
         class CustomFeed(Feed):
             def __init__(self):
                 super().__init__(name="custom")
 
-            def reload(self, existing_data: Data | None = None) -> DataSource:
+            def reload(  # ty: ignore[missing-override-decorator]  # Python 3.11 lacks override.
+                self, existing_data: Data | None = None
+            ) -> DataSource:
                 return CustomDataSource(datetime.now())
 
         feed = CustomFeed()

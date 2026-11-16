@@ -36,7 +36,7 @@ def random_language() -> Language:
 T = TypeVar("T")
 
 
-def random_logical_or(gen: Callable[[], T] = random_avstring) -> Logical | T:
+def random_logical_or(gen: Callable[[], T]) -> Logical | T:
     r = randint(0, 2)
     if r == 0:
         return Logical.ANY
@@ -51,16 +51,16 @@ def random_logical_or(gen: Callable[[], T] = random_avstring) -> Logical | T:
 def random_cpe() -> CPE:
     return CPE(
         part=random_logical_or(lambda: choice(list(Part))),
-        vendor=random_logical_or(),
-        product=random_logical_or(),
-        version=random_logical_or(),
-        update=random_logical_or(),
-        edition=random_logical_or(),
+        vendor=random_logical_or(random_avstring),
+        product=random_logical_or(random_avstring),
+        version=random_logical_or(random_avstring),
+        update=random_logical_or(random_avstring),
+        edition=random_logical_or(random_avstring),
         lang=random_logical_or(random_language),
-        sw_edition=random_logical_or(),
-        target_sw=random_logical_or(),
-        target_hw=random_logical_or(),
-        other=random_logical_or(),
+        sw_edition=random_logical_or(random_avstring),
+        target_sw=random_logical_or(random_avstring),
+        target_hw=random_logical_or(random_avstring),
+        other=random_logical_or(random_avstring),
     )
 
 

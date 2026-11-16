@@ -26,7 +26,14 @@ FEED = "cvedb/data/nvdcve-1.1-2002.json.gz"
 
 def project(root: Path) -> dict[str, bytes]:
     files = dict.fromkeys(("README.md", "LICENSE", "uv.lock", "AGENTS.md", "CODEOWNERS"), b"text\n")
-    files.update({"cvedb/__init__.py": b"", FEED: b"snapshot", "cvedb/data/README.md": b"NIST\n"})
+    files.update(
+        {
+            "cvedb/__init__.py": b"",
+            "cvedb/py.typed": b"",
+            FEED: b"snapshot",
+            "cvedb/data/README.md": b"NIST\n",
+        }
+    )
     files["pyproject.toml"] = b"""[project]
 name = "cvedb"
 version = "0.0.5"
@@ -96,6 +103,14 @@ class TestDistributions(TestCase):
         del self.wheel[FEED]
         with self.assertRaisesRegex(ValueError, "missing required files"):
             self.check()
+
+    def test_missing_typing_marker(self) -> None:
+        for contents in (self.source, self.wheel):
+            with self.subTest(contents=contents is self.source):
+                marker = contents.pop("cvedb/py.typed")
+                with self.assertRaisesRegex(ValueError, "missing required files"):
+                    self.check()
+                contents["cvedb/py.typed"] = marker
 
     def test_changed_bundled_feed(self) -> None:
         self.wheel[FEED] = b"changed"

@@ -23,6 +23,7 @@ uv sync --frozen --python 3.13
 uv run --frozen prek install
 uv run --frozen prek auto-update --cooldown-days 7
 uv run --frozen pytest -q
+uv run --frozen ty check --error-on-warning cvedb test scripts
 uv run --frozen pytest -q test/test_cpe.py
 uv run --frozen python -m cvedb --help
 uv run --frozen prek run --all-files
@@ -30,7 +31,7 @@ uv run --frozen python -m scripts.check_dist
 ```
 
 Use uv 0.13.7. Frozen sync installs the package and pinned development group in `.venv`.
-Prek reproduces CI's blocking lint, formatting, focused typing, test, shell, and workflow checks.
+Prek reproduces CI's blocking lint, formatting, typing, test, shell, and workflow checks.
 Packaging uses the pinned uv_build backend. The distribution check builds an sdist and its wheel,
 validates their metadata and contents, and checks a clean installed wheel outside the source tree.
 
@@ -39,8 +40,9 @@ validates their metadata and contents, and checks a clean installed wheel outsid
 Use four-space indentation, `snake_case` functions and variables, `PascalCase` classes, and
 `UPPER_SNAKE_CASE` constants. Add type annotations to new APIs and use absolute imports.
 Keep new lines within 100 characters. Ruff targets Python 3.11 and enforces formatting and a
-complexity limit of 8. Ty uses Python 3.11 semantics with all rules treated as errors; its focused
-hook scope remains explicit until the repository-wide type rollout is complete.
+complexity limit of 8. Ty checks all Python source, tests, and distribution scripts with Python
+3.11 semantics and all rules treated as errors. The package includes a `py.typed` marker for
+downstream type checking.
 
 ## Testing guidelines
 

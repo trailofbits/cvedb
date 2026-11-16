@@ -18,6 +18,8 @@ def main() -> None:
     installed = Path(cvedb.__file__).resolve()
     if installed.is_relative_to(source):
         raise ValueError(f"Smoke test imported the source tree instead of the wheel: {installed}")
+    if not installed.with_name("py.typed").is_file():
+        raise ValueError("Installed wheel has no py.typed marker")
     if not any(entry.name == "cvedb" for entry in distribution("cvedb").entry_points):
         raise ValueError("Installed wheel has no cvedb entry point")
     cpe = CPE(vendor="example", product="widget")
