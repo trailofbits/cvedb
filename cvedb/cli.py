@@ -1,11 +1,11 @@
 import argparse
 from datetime import datetime
-from dateutil.parser import isoparse, ParserError
 from importlib.metadata import version as package_version
 import sys
 from typing import List, Optional, Union
 
 from .cpe import Logical
+from cvedb.dates import parse_before_date, parse_date
 from .db import CVEdb, DEFAULT_DB_PATH
 from .feed import Data
 from .printing import print_cves
@@ -17,16 +17,6 @@ from .search import (
 
 def version() -> str:
     return package_version("cvedb")
-
-
-def parse_date(date_str: str) -> datetime:
-    try:
-        return isoparse(date_str).astimezone()
-    except ParserError:
-        pass
-    raise argparse.ArgumentTypeError(f"Invalid date {date_str!r}. Dates must be either a four digit year or an ISO "
-                                     "8601 string. See https://dateutil.readthedocs.io/en/stable/parser.html "
-                                     "for examples.")
 
 
 def parse_cpe_arg(cpe_str: str) -> Union[Logical, str]:
@@ -52,9 +42,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--descending", "-d", action="store_true",
                         help="reverse the ordering of results (default is ascending)")
     parser.add_argument("--after", "-a", type=parse_date, help="only list CVEs published after the given date")
-    parser.add_argument("--before", "-b", type=parse_date, help="only list CVEs published before the given date")
+    parser.add_argument(
+        "--before", "-b", type=parse_before_date,
+        help="only list CVEs published before the given date"
+    )
     parser.add_argument("--modified-after", "-ma", type=parse_date, help="only list CVEs modified after the given date")
-    parser.add_argument("--modified-before", "-mb", type=parse_date,
+    parser.add_argument("--modified-before", "-mb", type=parse_before_date,
                         help="only list CVEs modified before the given date")
 
     cpe_group = parser.add_argument_group(title="Common Platform Enumeration (CPE)",

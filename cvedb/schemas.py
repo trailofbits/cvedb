@@ -10,8 +10,11 @@ from cvss import CVSS2, CVSS3, CVSSError
 from cvedb.cpe import CPE, Testable
 from cvedb.cve import CVE, Configurations, Description, Reference
 from cvedb.feed import Data
+from cvedb.dates import utc_datetime
 from cvedb.search import (
     AbstractDateQuery,
+    AndQuery,
+    DescriptionQuery,
     AfterModifiedDateQuery,
     AfterPublishedDateQuery,
     BeforeModifiedDateQuery,
@@ -23,6 +26,7 @@ from cvedb.search import (
     SearchQuery,
     Sort,
     TermQuery,
+    text_contains,
 )
 from cvedb.sql import And, Or, Select, SimpleQuery, TRUE
 
@@ -69,7 +73,12 @@ _TABLES = (
 CVERow = tuple[str, int, float, float, str | None, float | None, int, str, str | None]
 _SORT_COLUMNS = {
     Sort.CVE_ID: "c.id",
-    Sort.DESCRIPTION: "d.description",
+    Sort.DESCRIPTION: (
+        "COALESCE((SELECT description FROM descriptions "
+        "WHERE cve=c.id AND feed=c.feed AND lang='en' ORDER BY position LIMIT 1), "
+        "(SELECT description FROM descriptions WHERE cve=c.id AND feed=c.feed "
+        "ORDER BY position LIMIT 1), '')"
+    ),
     Sort.PUBLISHED_DATE: "c.published",
     Sort.LAST_MODIFIED_DATE: "c.last_modified",
     Sort.IMPACT: "c.base_score",
@@ -84,9 +93,15 @@ _DATE_COLUMNS: dict[type[SearchQuery], tuple[str, str]] = {
 
 
 def _timestamp(value: datetime) -> float:
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    return value.timestamp()
+    return utc_datetime(value).timestamp()
+
+
+def _sql_contains(value: str | None, query: str, case_sensitive: int) -> int:
+    return int(text_contains(value, query, bool(case_sensitive)))
+
+
+class UnsupportedQueryError(ValueError):
+    """A query cannot be safely narrowed using the supported SQL predicates."""
 
 
 def _enable_foreign_keys(connection: Connection) -> None:
@@ -123,6 +138,7 @@ class Schema:
 
     def __init__(self, connection: Connection) -> None:
         self.connection = connection
+        connection.create_function("cvedb_contains", 3, _sql_contains, deterministic=True)
 
     def path(self) -> str:
         """Return the connection's main database filename."""
@@ -310,24 +326,36 @@ class Schema:
         """Prepare a conservative SQL predicate for supported queries."""
         if type(query) in (CPEQuery, EnvironmentQuery):
             return Select("", "", where=TRUE)
-        if isinstance(query, TermQuery):
-            text = query.query if query.case_sensitive else query.query.upper()
-            description = "d.description" if query.case_sensitive else "UPPER(d.description)"
-            identity = "c.id" if query.case_sensitive else "UPPER(c.id)"
-            return Select(
-                "",
-                "",
-                where=SimpleQuery(f"({description} LIKE ? OR {identity} LIKE ?)"),
-                params=[f"%{text}%", f"%{text}%"],
-            )
+        if type(query) in (TermQuery, DescriptionQuery):
+            return cls._text_query(cast(TermQuery, query))
         if isinstance(query, AbstractDateQuery) and type(query) in _DATE_COLUMNS:
             column, operator = _DATE_COLUMNS[type(query)]
             return Select(
                 "", "", where=SimpleQuery(f"{column} {operator} ?"), params=[_timestamp(query.date)]
             )
-        if isinstance(query, CompoundQuery):
-            return cls._compound_query(query)
+        if type(query) in (AndQuery, OrQuery):
+            return cls._compound_query(cast(CompoundQuery, query))
         return None
+
+    @staticmethod
+    def _text_query(query: TermQuery) -> Select:
+        description = (
+            "EXISTS (SELECT 1 FROM descriptions d WHERE d.cve=c.id AND d.feed=c.feed "
+            "AND cvedb_contains(d.description, ?, ?))"
+        )
+        predicates = [description]
+        if type(query) is TermQuery:
+            predicates.extend(
+                [
+                    "cvedb_contains(c.id, ?, ?)",
+                    "cvedb_contains(c.assigner, ?, ?)",
+                    "EXISTS (SELECT 1 FROM refs r WHERE r.cve=c.id AND r.feed=c.feed "
+                    "AND (cvedb_contains(r.name, ?, ?) OR cvedb_contains(r.url, ?, ?)))",
+                ]
+            )
+        count = 1 if type(query) is DescriptionQuery else 5
+        params: list[int | float | str | None] = [query.query, int(query.case_sensitive)] * count
+        return Select("", "", where=SimpleQuery("(" + " OR ".join(predicates) + ")"), params=params)
 
     @classmethod
     def _compound_query(cls, query: CompoundQuery) -> Select | None:
@@ -343,9 +371,9 @@ class Schema:
         return Select("", "", where=combine(*children), params=params)
 
     def finalize_query(self, select: Select) -> None:
-        """Join metadata by full identity without excluding records lacking descriptions."""
-        select.columns = "DISTINCT c.*"
-        select.from_tables = "cves c LEFT JOIN descriptions d ON d.cve=c.id AND d.feed=c.feed"
+        """Select main records without introducing duplicate child rows."""
+        select.columns = "c.*"
+        select.from_tables = "cves c"
 
     def search(
         self,
@@ -354,19 +382,33 @@ class Schema:
         sort: Iterable[Sort] = (Sort.CVE_ID,),
         ascending: bool = True,
     ) -> Iterator[CVE]:
-        """Search supported SQL candidates and apply the complete Python predicate."""
+        """Prepare SQL eagerly and return a lazy iterator of fully matched records.
+
+        Raises:
+            UnsupportedQueryError: The query needs in-memory evaluation instead.
+        """
         query = Data.make_query(*queries)
         select = self.to_query(query)
         if select is None:
-            raise ValueError("The query could not be converted to a SQL query")
+            raise UnsupportedQueryError(f"Unsupported SQL query: {type(query).__name__}")
         feed_ids = [feed.feed_id for feed in db_data.feeds]
         feeds = SimpleQuery(f"c.feed IN ({', '.join('?' for _ in feed_ids)})")
         select.where = feeds if select.where is None else And(select.where, feeds)
         select.params.extend(feed_ids)
         direction = "ASC" if ascending else "DESC"
-        select.order_by = ", ".join(f"{_SORT_COLUMNS[value]} {direction}" for value in sort) or None
+        sorts = tuple(sort)
+        columns = [_SORT_COLUMNS[value] for value in sorts]
+        if sorts and Sort.CVE_ID not in sorts:
+            columns.append("c.id")
+        select.order_by = ", ".join(f"{column} {direction}" for column in columns) or None
         self.finalize_query(select)
+        return self._search_results(query, select)
+
+    def _search_results(self, query: SearchQuery, select: Select) -> Iterator[CVE]:
         rows = self.connection.execute(select.to_sql(), select.params)
-        for cve in self.cve_iter(rows):
-            if query.matches(cve):
-                yield cve
+        try:
+            for cve in self.cve_iter(rows):
+                if query.matches(cve):
+                    yield cve
+        finally:
+            rows.close()

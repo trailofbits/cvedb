@@ -4,8 +4,9 @@ from datetime import datetime
 import time
 from typing import Any, Callable, Dict, FrozenSet, Iterable, Iterator, Optional, Tuple, Union
 
-from .cve import CVE
-from .search import OrQuery, SearchQuery, Sort, TermQuery
+from cvedb.cve import CVE
+from cvedb.dates import utc_datetime
+from cvedb.search import OrQuery, SearchQuery, Sort, TermQuery
 
 MAX_DATA_AGE_SECONDS: int = 86400  # 1 day
 
@@ -14,16 +15,33 @@ IterableCVE = IterableABC[CVE]
 
 
 class DataSource(ABC, Hashable, IterableCVE):
-    def __init__(self, last_modified_date: datetime):
-        self.last_modified_date: datetime = last_modified_date
+    """CVE records whose timestamp may be absent in an unloaded persisted view.
 
-    def __eq__(self, other):
+    Sources without timestamps cannot be ordered. Fresh feed ingestion requires
+    a timestamp before any records or successful-update metadata are persisted.
+    """
+
+    def __init__(self, last_modified_date: datetime | None):
+        self.last_modified_date: datetime | None = last_modified_date
+
+    def __eq__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+        self, other
+    ):
         return isinstance(other, DataSource) and self.last_modified_date == other.last_modified_date
 
-    def __lt__(self, other):
-        return self.last_modified_date < other.last_modified_date
+    def __lt__(self, other: "DataSource") -> bool:
+        """Compare source timestamps as UTC instants.
 
-    def __hash__(self):
+        Raises:
+            TypeError: Either source has no last-modified timestamp.
+        """
+        if self.last_modified_date is None or other.last_modified_date is None:
+            raise TypeError("Cannot order data sources without last-modified timestamps")
+        return utc_datetime(self.last_modified_date) < utc_datetime(other.last_modified_date)
+
+    def __hash__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+        self,
+    ):
         return hash(self.last_modified_date)
 
 
@@ -44,15 +62,15 @@ class Data(DataSource, Sized, ABC):
     @staticmethod
     def sort_key(*sorts: Sort) -> Callable[[CVE], Tuple[Any, ...]]:
         def get_key(cve: CVE):
-            return tuple(sort.get_key(cve) for sort in sorts)
+            return tuple(sort.get_key(cve) for sort in sorts) + ((cve.cve_id,) if sorts else ())
 
         return get_key
 
     def search(
-            self,
-            *queries: Union[str, SearchQuery],
-            sort: Iterable[Sort] = (Sort.CVE_ID,),
-            ascending: bool = True
+        self,
+        *queries: Union[str, SearchQuery],
+        sort: Iterable[Sort] = (Sort.CVE_ID,),
+        ascending: bool = True,
     ) -> Iterator[CVE]:
         query = Data.make_query(*queries)
         for cve in sorted(self, key=Data.sort_key(*sort), reverse=not ascending):
@@ -61,7 +79,7 @@ class Data(DataSource, Sized, ABC):
 
 
 class InMemoryData(Data):
-    def __init__(self, last_modified_date: datetime, cves: Iterable[CVE]):
+    def __init__(self, last_modified_date: datetime | None, cves: Iterable[CVE]):
         super().__init__(last_modified_date)
         self.cves: FrozenSet[CVE] = frozenset(cves)
 
@@ -69,10 +87,14 @@ class InMemoryData(Data):
     def load(source: DataSource) -> "Data":
         return InMemoryData(source.last_modified_date, source)
 
-    def __iter__(self) -> Iterator[CVE]:
+    def __iter__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+        self,
+    ) -> Iterator[CVE]:
         return iter(self.cves)
 
-    def __len__(self):
+    def __len__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+        self,
+    ):
         return len(self.cves)
 
 
@@ -98,7 +120,10 @@ class Feed(ABC):
 
     def is_out_of_date(self) -> bool:
         last_modified = self.last_modified()
-        return last_modified is None or int(time.time()) - last_modified.timestamp() >= MAX_DATA_AGE_SECONDS
+        return (
+            last_modified is None
+            or int(time.time()) - last_modified.timestamp() >= MAX_DATA_AGE_SECONDS
+        )
 
     def data(self, force_reload: bool = False) -> Data:
         if force_reload or self._data is None:

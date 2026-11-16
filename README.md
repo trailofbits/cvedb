@@ -173,3 +173,29 @@ custom feeds into the replacement. Retain the original file until you have
 verified the replacement; CVEdb does not automatically delete or migrate it.
 
 [cpe-name-matching]: https://nvlpubs.nist.gov/nistpubs/legacy/ir/nistir7696.pdf
+
+
+## Search semantics
+
+Text searches match literal substrings in CVE IDs, all description languages,
+reference names and URLs, and assigners. Matching ignores case with Unicode
+casefold unless you pass `case_sensitive=True`. Percent signs and underscores are
+literal characters. `DescriptionQuery` searches descriptions only.
+
+Date filters compare inclusive UTC instants. Naive datetimes and CLI timestamps
+mean UTC. Date-only `--before` and `--modified-before` values include the entire
+parsed UTC day; after filters start at midnight. Explicit timestamps, including
+midnight, retain their exact instant. A year-only or month-only input denotes
+its first day, rather than its entire year or month. For example, `--before 2020`
+includes January 1, 2020, through 23:59:59.999999 UTC.
+
+Description sorting uses English when present, otherwise the first description,
+otherwise an empty string. An empty English description remains empty. Unknown
+impact scores sort before known scores in ascending order and after them in
+descending order. CVE IDs break ties for requested sort keys. Timestamp sort keys
+use UTC in memory and in SQLite.
+
+CPE and environment searches use conservative SQL candidate selection and then
+evaluate complete persisted configurations. They may scan many records. Custom
+query classes use in-memory filtering and ordering; matching and database errors
+propagate instead of silently changing the query.

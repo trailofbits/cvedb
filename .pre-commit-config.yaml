@@ -1,7 +1,7 @@
 files: >-
   (?x)^(
-    cvedb/(cpe|cve|nvd|schemas|search|sql)\.py
-    |test/test_(cpe_matching|applicability|storage|nvd)\.py
+    cvedb/(cpe|cve|nvd|schemas|search|sql|dates|db|feed)\.py
+    |test/test_(cpe_matching|applicability|storage|nvd|search|search_dates)\.py
   )$
 repos:
   - repo: local

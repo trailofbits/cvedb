@@ -74,7 +74,7 @@ class CompoundQuery(Query):
         if isinstance(query, TrueQuery):
             query = TrueQuery()
         if isinstance(query, CompoundQuery) and query.operand == self.operand:
-            self.extend(query.queries)
+            self.extend(tuple(query.queries))
         else:
             query.remove_from_parent()
             self.queries.append(query)

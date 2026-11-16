@@ -1,12 +1,13 @@
 from abc import ABC, abstractmethod
-from datetime import datetime, timezone
+from datetime import datetime
 from dataclasses import replace
 from enum import Enum
-from typing import Any, Optional, Tuple
+from typing import Optional, Tuple
 from collections.abc import Iterable
 
 from cvedb.cpe import CPE
 from cvedb.cve import CVE
+from cvedb.dates import utc_datetime
 
 
 class Sort(Enum):
@@ -17,15 +18,23 @@ class Sort(Enum):
     IMPACT = 4
     SEVERITY = 5
 
-    def get_key(self, cve: CVE) -> Any:
+    def get_key(self, cve: CVE) -> str | int | float | datetime:
+        """Return a comparable key with missing descriptions and scores ordered first."""
         if self == Sort.IMPACT:
-            if cve.impact is None or cve.impact.base_score is None:
-                return float("-inf")
-            return float(cve.impact.base_score)
+            score = None if cve.impact is None else cve.impact.base_score
+            return float("-inf") if score is None else float(score)
         if self == Sort.DESCRIPTION:
-            fallback = cve.descriptions[0].value if cve.descriptions else ""
-            return cve.description() or fallback
-        return getattr(cve, self.name.lower())
+            description = cve.description()
+            if description is None:
+                description = cve.descriptions[0].value if cve.descriptions else ""
+            return description
+        if self == Sort.PUBLISHED_DATE:
+            return utc_datetime(cve.published_date)
+        if self == Sort.LAST_MODIFIED_DATE:
+            return utc_datetime(cve.last_modified_date)
+        if self == Sort.SEVERITY:
+            return int(cve.severity)
+        return cve.cve_id
 
 
 class SearchQuery(ABC):
@@ -34,15 +43,9 @@ class SearchQuery(ABC):
         return False
 
 
-def _utc_datetime(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
-
-
 class AbstractDateQuery(SearchQuery, ABC):
     def __init__(self, date: datetime):
-        self.date: datetime = _utc_datetime(date)
+        self.date: datetime = utc_datetime(date)
 
     @abstractmethod
     def get_field(self, cve: CVE) -> datetime:
@@ -56,7 +59,7 @@ class BeforeQuery(AbstractDateQuery, ABC):
     def matches(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
         self, cve: CVE
     ) -> bool:
-        return _utc_datetime(self.get_field(cve)) <= self.date
+        return utc_datetime(self.get_field(cve)) <= self.date
 
 
 class AfterQuery(AbstractDateQuery, ABC):
@@ -66,7 +69,7 @@ class AfterQuery(AbstractDateQuery, ABC):
     def matches(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
         self, cve: CVE
     ) -> bool:
-        return _utc_datetime(self.get_field(cve)) >= self.date
+        return utc_datetime(self.get_field(cve)) >= self.date
 
 
 class AfterPublishedDateQuery(AfterQuery):
@@ -109,6 +112,15 @@ class BeforeModifiedDateQuery(BeforeQuery):
         return cve.last_modified_date
 
 
+def text_contains(value: str | None, query: str, case_sensitive: bool) -> bool:
+    """Match a literal substring, applying Unicode casefold consistently when requested."""
+    if value is None:
+        return False
+    if case_sensitive:
+        return query in value
+    return query.casefold() in value.casefold()
+
+
 class TermQuery(SearchQuery):
     def __init__(self, query: str, case_sensitive: bool = False):
         self._query: str = query
@@ -119,11 +131,7 @@ class TermQuery(SearchQuery):
         return self._query
 
     def _contains(self, value: str | None) -> bool:
-        if value is None:
-            return False
-        if self.case_sensitive:
-            return self._query in value
-        return self._query.lower() in value.lower()
+        return text_contains(value, self._query, self.case_sensitive)
 
     def matches(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
         self, cve: CVE
@@ -139,7 +147,7 @@ class TermQuery(SearchQuery):
         if self.case_sensitive:
             return self._query
         else:
-            return self._query.lower()
+            return self._query.casefold()
 
     def __hash__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
         self,
@@ -176,12 +184,7 @@ class DescriptionQuery(TermQuery):
     def matches(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
         self, cve: CVE
     ) -> bool:
-        for description in cve.descriptions:
-            if (self.case_sensitive and self._query in description.value) or (
-                not self.case_sensitive and self._query.lower() in description.value.lower()
-            ):
-                return True
-        return False
+        return any(self._contains(description.value) for description in cve.descriptions)
 
 
 class CompoundQuery(SearchQuery, ABC):
