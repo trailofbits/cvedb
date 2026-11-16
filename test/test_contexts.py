@@ -236,13 +236,14 @@ class _CloseFailureCursor(sqlite3.Cursor):
     def close(  # ty: ignore[missing-override-decorator]  # Python 3.10 lacks override.
         self,
     ) -> None:
+        failure = cast(_CloseFailureConnection, self.connection).close_error
         super().close()
-        connection = cast(_CloseFailureConnection, self.connection)
-        raise connection.close_error("unexpected cursor close failure")
+        if failure is not None:
+            raise failure("unexpected cursor close failure")
 
 
 class _CloseFailureConnection(sqlite3.Connection):
-    close_error: type[sqlite3.Error]
+    close_error: type[sqlite3.Error] | None = None
 
     def execute(  # ty: ignore[missing-override-decorator]  # Python 3.10 lacks override.
         self, sql: str, parameters: object = ()
@@ -258,10 +259,10 @@ def test_live_connection_cursor_cleanup_errors_are_not_suppressed(
 ) -> None:
     connection = sqlite3.connect(":memory:", factory=_CloseFailureConnection)
     assert isinstance(connection, _CloseFailureConnection)
-    connection.close_error = error
     with patch("cvedb.db.connect", return_value=connection):
         with CVEdb.open(tmp_path / "cursor-error.sqlite", [_iterator_feed()]) as db:
             results = _partial_results(db, mode)
+            connection.close_error = error
             with pytest.raises(error, match="unexpected cursor close failure"):
                 results.close()
 
