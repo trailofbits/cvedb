@@ -380,8 +380,8 @@ class TestError(ValueError):
 
 
 class LogicalTest(Testable, ABC):
-    def __init__(self, children: Iterable[Union["LogicalTest", CPE]], negate: bool = False):
-        self.children: Tuple[Union[LogicalTest, CPE], ...] = tuple(children)
+    def __init__(self, children: Iterable[Testable], negate: bool = False):
+        self.children: Tuple[Testable, ...] = tuple(children)
         self.negate: bool = negate
 
     def __eq__(self, other):
