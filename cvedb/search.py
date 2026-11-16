@@ -1,10 +1,13 @@
 from abc import ABC, abstractmethod
 from datetime import datetime
+from dataclasses import replace
 from enum import Enum
-from typing import Any, Optional, Tuple
+from typing import Optional, Tuple
+from collections.abc import Iterable
 
-from .cpe import CPE
-from .cve import CVE
+from cvedb.cpe import CPE
+from cvedb.cve import CVE
+from cvedb.dates import utc_datetime
 
 
 class Sort(Enum):
@@ -15,10 +18,23 @@ class Sort(Enum):
     IMPACT = 4
     SEVERITY = 5
 
-    def get_key(self, cve: CVE) -> Any:
+    def get_key(self, cve: CVE) -> str | int | float | datetime:
+        """Return a comparable key with missing descriptions and scores ordered first."""
         if self == Sort.IMPACT:
-            return cve.impact.base_score
-        return getattr(cve, self.name.lower())
+            score = None if cve.impact is None else cve.impact.base_score
+            return float("-inf") if score is None else float(score)
+        if self == Sort.DESCRIPTION:
+            description = cve.description()
+            if description is None:
+                description = cve.descriptions[0].value if cve.descriptions else ""
+            return description
+        if self == Sort.PUBLISHED_DATE:
+            return utc_datetime(cve.published_date)
+        if self == Sort.LAST_MODIFIED_DATE:
+            return utc_datetime(cve.last_modified_date)
+        if self == Sort.SEVERITY:
+            return int(cve.severity)
+        return cve.cve_id
 
 
 class SearchQuery(ABC):
@@ -29,7 +45,7 @@ class SearchQuery(ABC):
 
 class AbstractDateQuery(SearchQuery, ABC):
     def __init__(self, date: datetime):
-        self.date: datetime = date
+        self.date: datetime = utc_datetime(date)
 
     @abstractmethod
     def get_field(self, cve: CVE) -> datetime:
@@ -40,23 +56,29 @@ class BeforeQuery(AbstractDateQuery, ABC):
     def __init__(self, date_before: datetime):
         super().__init__(date_before)
 
-    def matches(self, cve: CVE) -> bool:
-        return self.get_field(cve).date() <= self.date
+    def matches(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+        self, cve: CVE
+    ) -> bool:
+        return utc_datetime(self.get_field(cve)) <= self.date
 
 
 class AfterQuery(AbstractDateQuery, ABC):
     def __init__(self, date_after: datetime):
         super().__init__(date_after)
 
-    def matches(self, cve: CVE) -> bool:
-        return self.get_field(cve) >= self.date
+    def matches(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+        self, cve: CVE
+    ) -> bool:
+        return utc_datetime(self.get_field(cve)) >= self.date
 
 
 class AfterPublishedDateQuery(AfterQuery):
     def __init__(self, date_after: datetime):
         super().__init__(date_after)
 
-    def get_field(self, cve: CVE) -> datetime:
+    def get_field(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+        self, cve: CVE
+    ) -> datetime:
         return cve.published_date
 
 
@@ -64,7 +86,9 @@ class BeforePublishedDateQuery(BeforeQuery):
     def __init__(self, date_before: datetime):
         super().__init__(date_before)
 
-    def get_field(self, cve: CVE) -> datetime:
+    def get_field(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+        self, cve: CVE
+    ) -> datetime:
         return cve.published_date
 
 
@@ -72,7 +96,9 @@ class AfterModifiedDateQuery(AfterQuery):
     def __init__(self, date_after: datetime):
         super().__init__(date_after)
 
-    def get_field(self, cve: CVE) -> datetime:
+    def get_field(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+        self, cve: CVE
+    ) -> datetime:
         return cve.last_modified_date
 
 
@@ -80,8 +106,19 @@ class BeforeModifiedDateQuery(BeforeQuery):
     def __init__(self, date_before: datetime):
         super().__init__(date_before)
 
-    def get_field(self, cve: CVE) -> datetime:
+    def get_field(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+        self, cve: CVE
+    ) -> datetime:
         return cve.last_modified_date
+
+
+def text_contains(value: str | None, query: str, case_sensitive: bool) -> bool:
+    """Match a literal substring, applying Unicode casefold consistently when requested."""
+    if value is None:
+        return False
+    if case_sensitive:
+        return query in value
+    return query.casefold() in value.casefold()
 
 
 class TermQuery(SearchQuery):
@@ -93,55 +130,61 @@ class TermQuery(SearchQuery):
     def query(self) -> str:
         return self._query
 
-    def matches(self, cve: CVE) -> bool:
-        for description in cve.descriptions:
-            if (self.case_sensitive and self._query in description.value) or \
-                    (not self.case_sensitive and self._query.lower() in description.value.lower()):
-                return True
-        if self._query in cve.cve_id:
+    def _contains(self, value: str | None) -> bool:
+        return text_contains(value, self._query, self.case_sensitive)
+
+    def matches(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+        self, cve: CVE
+    ) -> bool:
+        if self._contains(cve.cve_id) or self._contains(cve.assigner):
             return True
-        for reference in cve.references:
-            if (self.case_sensitive and self._query in reference.name) or \
-                    (not self.case_sensitive and self._query.lower() in reference.name.lower()):
-                return True
-            elif (self.case_sensitive and self._query in reference.url) or \
-                    (not self.case_sensitive and self._query.lower() in reference.url.lower()):
-                return True
-        if cve.assigner is not None and self._query in cve.assigner:
+        if any(self._contains(description.value) for description in cve.descriptions):
             return True
-        return False
+        return any(self._contains(ref.name) or self._contains(ref.url) for ref in cve.references)
 
     @property
     def _normalized_query(self) -> str:
         if self.case_sensitive:
             return self._query
         else:
-            return self._query.lower()
+            return self._query.casefold()
 
-    def __hash__(self):
+    def __hash__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+        self,
+    ) -> int:
         return hash(self._normalized_query)
 
-    def __eq__(self, other):
-        return isinstance(other, TermQuery) and other._normalized_query == self._normalized_query and \
-               self.case_sensitive == other.case_sensitive
+    def __eq__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+        self, other: object
+    ) -> bool:
+        return (
+            isinstance(other, TermQuery)
+            and other._normalized_query == self._normalized_query
+            and self.case_sensitive == other.case_sensitive
+        )
 
-    def __lt__(self, other):
+    def __lt__(self, other: object) -> bool:
         return isinstance(other, TermQuery) and self._normalized_query < other._normalized_query
 
-    def __str__(self):
+    def __str__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+        self,
+    ) -> str:
         return self._query
 
-    def __repr__(self):
-        return f"{self.__class__.__name__}(query={self._query!r}, case_sensitive={self.case_sensitive!r})"
+    def __repr__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+        self,
+    ) -> str:
+        return (
+            f"{self.__class__.__name__}(query={self._query!r}, "
+            f"case_sensitive={self.case_sensitive!r})"
+        )
 
 
 class DescriptionQuery(TermQuery):
-    def matches(self, cve: CVE) -> bool:
-        for description in cve.descriptions:
-            if (self.case_sensitive and self._query in description.value) or \
-                    (not self.case_sensitive and self._query.lower() in description.value.lower()):
-                return True
-        return False
+    def matches(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+        self, cve: CVE
+    ) -> bool:
+        return any(self._contains(description.value) for description in cve.descriptions)
 
 
 class CompoundQuery(SearchQuery, ABC):
@@ -150,21 +193,45 @@ class CompoundQuery(SearchQuery, ABC):
 
 
 class AndQuery(CompoundQuery):
-    def matches(self, cve: CVE) -> bool:
+    def matches(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+        self, cve: CVE
+    ) -> bool:
         return all(q.matches(cve) for q in self.sub_queries)
 
 
 class OrQuery(CompoundQuery):
-    def matches(self, cve: CVE) -> bool:
+    def matches(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+        self, cve: CVE
+    ) -> bool:
         return any(q.matches(cve) for q in self.sub_queries)
 
 
 class CPEQuery(SearchQuery):
-    def __init__(self, cpe: Optional[CPE] = None, **kwargs):
+    """Find candidate associations with vulnerable-marked product criteria.
+
+    Required platforms and logical negation do not confirm applicability in a
+    candidate search. Use EnvironmentQuery for complete inventory evaluation.
+    """
+
+    def __init__(self, cpe: Optional[CPE] = None, **kwargs: object) -> None:
         if cpe is None:
-            self.cpe: CPE = CPE(**kwargs)
+            self.cpe: CPE = replace(CPE(), **kwargs)
         else:
             self.cpe = cpe
 
-    def matches(self, cve: CVE) -> bool:
-        return cve.configurations.match(self.cpe)
+    def matches(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+        self, cve: CVE
+    ) -> bool:
+        return cve.configurations.match_candidate(self.cpe)
+
+
+class EnvironmentQuery(SearchQuery):
+    """Confirm applicability against a complete inventory, including required platforms."""
+
+    def __init__(self, inventory: Iterable[CPE]) -> None:
+        self.inventory = tuple(inventory)
+
+    def matches(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+        self, cve: CVE
+    ) -> bool:
+        return cve.configurations.match_inventory(self.inventory)

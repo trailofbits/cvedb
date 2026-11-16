@@ -1,0 +1,22 @@
+files: >-
+  (?x)^(
+    cvedb/(cpe|cve|nvd|schemas|search|sql|dates|db|feed|cli|__main__)\.py
+    |test/test_(cpe_matching|applicability|storage|nvd|search|search_dates
+    |updates|contexts|feeds|transport|cli)\.py
+    |test/feed_fixtures\.py
+  )$
+repos:
+  - repo: local
+    hooks:
+      - id: ruff
+        name: Lint correctness fixes
+        language: system
+        entry: .venv/bin/ruff check
+      - id: ruff-format
+        name: Check correctness formatting
+        language: system
+        entry: .venv/bin/ruff format --check
+      - id: ty
+        name: Check correctness types
+        language: system
+        entry: .venv/bin/ty check --error-on-warning

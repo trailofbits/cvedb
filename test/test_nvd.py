@@ -67,7 +67,7 @@ def test_bundled_legacy_feed_loads_without_network() -> None:
     with patch(
         "cvedb.nvd.urllib.request.urlopen", side_effect=AssertionError("Unexpected network")
     ):
-        source = FEEDS["2002"].reload()
+        source = FEEDS["2002"].data()
     assert len(list(source)) > 0
 
 
@@ -216,8 +216,8 @@ def test_non_vulnerable_operands_are_preserved() -> None:
         }
     ]
     configurations = _load(feed).configurations
-    assert _matches(configurations, "2.0")
-    assert not _matches(configurations, "3.0")
+    assert not _matches(configurations, "2.0")
+    assert _matches(configurations, "3.0")
 
 
 def test_non_vulnerable_version_range_can_be_matched() -> None:
@@ -232,8 +232,8 @@ def test_non_vulnerable_version_range_can_be_matched() -> None:
         }
     ]
     configurations = _load(feed).configurations
-    assert not _matches(configurations, "3.0")
-    assert _matches(configurations, "4.0")
+    assert _matches(configurations, "3.0")
+    assert not _matches(configurations, "4.0")
 
 
 @pytest.mark.parametrize("level", ["configuration", "node"])

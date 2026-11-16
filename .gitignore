@@ -1,0 +1,9 @@
+.venv/
+.uv-cache/
+.hypothesis/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.egg-info/
+.venv310/
+.prek-cache/
