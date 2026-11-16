@@ -74,6 +74,14 @@ class Testable(metaclass=TestableMeta):
     def load_content(cls, stream: TextIO) -> "Testable":
         raise NotImplementedError
 
+    def match_inventory(self, inventory: Iterable["CPE"]) -> bool:
+        """Evaluate this criterion against a complete inventory of target names."""
+        return any(self.match(cpe) for cpe in inventory)
+
+    def candidate_criteria(self) -> Iterator["Testable"]:
+        """Yield marked product criteria without confirming environmental applicability."""
+        yield self
+
     @abstractmethod
     def vulnerable_cpes(self) -> Iterator["CPE"]:
         raise NotImplementedError
@@ -472,6 +480,12 @@ class LogicalTest(Testable, ABC):
         for child in self.children:
             child.dump(stream)
 
+    def candidate_criteria(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+        self,
+    ) -> Iterator[Testable]:
+        for child in self.children:
+            yield from child.candidate_criteria()
+
     def vulnerable_cpes(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
         self,
     ) -> Iterator[CPE]:
@@ -489,6 +503,13 @@ class And(LogicalTest):
         result = all(child.match(cpe) for child in self.children)
         return not result if self.negate else result
 
+    def match_inventory(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+        self, inventory: Iterable[CPE]
+    ) -> bool:
+        inventory = tuple(inventory)
+        result = all(child.match_inventory(inventory) for child in self.children)
+        return not result if self.negate else result
+
 
 class Or(LogicalTest):
     uid = "o"
@@ -497,6 +518,13 @@ class Or(LogicalTest):
         self, cpe: CPE
     ) -> bool:
         result = any(child.match(cpe) for child in self.children)
+        return not result if self.negate else result
+
+    def match_inventory(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+        self, inventory: Iterable[CPE]
+    ) -> bool:
+        inventory = tuple(inventory)
+        result = any(child.match_inventory(inventory) for child in self.children)
         return not result if self.negate else result
 
 
@@ -520,6 +548,16 @@ class Negate(Testable):
         self, cpe: CPE
     ) -> bool:
         return not self.wrapped.match(cpe)
+
+    def match_inventory(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+        self, inventory: Iterable[CPE]
+    ) -> bool:
+        return not self.wrapped.match_inventory(tuple(inventory))
+
+    def candidate_criteria(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+        self,
+    ) -> Iterator[Testable]:
+        yield from self.wrapped.candidate_criteria()
 
     def dump_content(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
         self, stream: TextIO
@@ -669,3 +707,51 @@ class VersionRange(Testable):
         self,
     ) -> Iterator[CPE]:
         yield from self.wrapped.vulnerable_cpes()
+
+
+@dataclass(frozen=True)
+class CPEMatch(Testable):
+    """A positive applicability criterion with independent vulnerability marking.
+
+    The mark selects product associations for candidate searches. It does not
+    invert the criterion or remove a required environmental product.
+    """
+
+    uid: ClassVar[str] = "m"
+    criterion: CPE | VersionRange
+    vulnerable: bool = True
+
+    def match(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+        self, cpe: CPE
+    ) -> bool:
+        return self.criterion.match(cpe)
+
+    def candidate_criteria(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+        self,
+    ) -> Iterator[Testable]:
+        if self.vulnerable:
+            yield self.criterion
+
+    def vulnerable_cpes(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+        self,
+    ) -> Iterator[CPE]:
+        if self.vulnerable:
+            yield from self.criterion.vulnerable_cpes()
+
+    def dump_content(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+        self, stream: TextIO
+    ) -> None:
+        stream.write("1" if self.vulnerable else "0")
+        self.criterion.dump(stream)
+
+    @classmethod
+    def load_content(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+        cls, stream: TextIO
+    ) -> "CPEMatch":
+        flag = stream.read(1)
+        if flag not in ("0", "1"):
+            raise ValueError(f"Invalid vulnerable criterion marker {flag!r}; expected '0' or '1'")
+        criterion = Testable.load(stream)
+        if not isinstance(criterion, (CPE, VersionRange)):
+            raise ValueError("A marked criterion must wrap a CPE or version range")
+        return cls(criterion, flag == "1")

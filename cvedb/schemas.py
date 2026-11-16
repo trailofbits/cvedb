@@ -1,539 +1,372 @@
-from abc import abstractmethod, ABC
+"""Feed-scoped SQLite persistence for CVE records."""
+
+from collections.abc import Iterable, Iterator
 from datetime import datetime, timezone
 from sqlite3 import Connection
-import sys
-from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Tuple, Type, TypeVar, Union
+from typing import TYPE_CHECKING, cast
 
 from cvss import CVSS2, CVSS3, CVSSError
 
-from .feed import Data
-from .cve import Configurations, CVE, Description, Reference
-from .search import (
-    AfterModifiedDateQuery, AfterPublishedDateQuery, BeforeModifiedDateQuery, BeforePublishedDateQuery, CompoundQuery,
-    CPEQuery, OrQuery, SearchQuery, Sort, TermQuery
+from cvedb.cpe import CPE, Testable
+from cvedb.cve import CVE, Configurations, Description, Reference
+from cvedb.feed import Data
+from cvedb.search import (
+    AbstractDateQuery,
+    AfterModifiedDateQuery,
+    AfterPublishedDateQuery,
+    BeforeModifiedDateQuery,
+    BeforePublishedDateQuery,
+    CompoundQuery,
+    CPEQuery,
+    EnvironmentQuery,
+    OrQuery,
+    SearchQuery,
+    Sort,
+    TermQuery,
 )
-from .sql import And, Select, Or, Query, SimpleQuery, TRUE
+from cvedb.sql import And, Or, Select, SimpleQuery, TRUE
 
+if TYPE_CHECKING:
+    from cvedb.db import CVEdbData
 
-SCHEMAS: Dict[int, Type["Schema"]] = {}
-
-
-S = TypeVar("S", bound="Schema")
-
-FEED_TABLE_CREATE = (
-    "CREATE TABLE IF NOT EXISTS feeds("
-    "name VARCHAR UNIQUE NOT NULL, "
-    "last_modified INTEGER NULL, "
-    "last_checked INTEGER NULL "
-    ")"
+CPE_COLUMNS = {
+    "part": "part",
+    "vendor": "vendor",
+    "product": "product",
+    "version": "version",
+    "update": "update_str",
+    "edition": "edition",
+    "lang": "language",
+    "sw_edition": "sw_edition",
+    "target_sw": "target_sw",
+    "target_hw": "target_hw",
+    "other": "other",
+}
+_CPE_FIELDS = ", ".join(CPE_COLUMNS.values())
+_CPE_VALUES = ", ".join("?" for _ in CPE_COLUMNS)
+_CPE_LOOKUP = " AND ".join(f"{column} = ?" for column in CPE_COLUMNS.values())
+_CHILD_FOREIGN_KEY = "FOREIGN KEY(cve, feed) REFERENCES cves(id, feed) ON DELETE CASCADE"
+_TABLES = (
+    "CREATE TABLE feeds(id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL, "
+    "last_modified REAL, last_checked REAL)",
+    "CREATE TABLE cves(id TEXT NOT NULL, feed INTEGER NOT NULL REFERENCES feeds(id), "
+    "published REAL NOT NULL, last_modified REAL NOT NULL, impact_vector TEXT, "
+    "base_score REAL, severity INTEGER NOT NULL, configurations TEXT NOT NULL, assigner TEXT, "
+    "PRIMARY KEY(id, feed))",
+    "CREATE TABLE descriptions(cve TEXT NOT NULL, feed INTEGER NOT NULL, "
+    "position INTEGER NOT NULL, "
+    "lang TEXT NOT NULL, description TEXT NOT NULL, PRIMARY KEY(cve, feed, position), "
+    f"{_CHILD_FOREIGN_KEY})",
+    "CREATE TABLE refs(cve TEXT NOT NULL, feed INTEGER NOT NULL, position INTEGER NOT NULL, "
+    f"name TEXT, url TEXT, PRIMARY KEY(cve, feed, position), {_CHILD_FOREIGN_KEY})",
+    "CREATE TABLE cpes(id INTEGER PRIMARY KEY, "
+    + ", ".join(f"{column} TEXT NOT NULL" for column in CPE_COLUMNS.values())
+    + f", UNIQUE({_CPE_FIELDS}))",
+    "CREATE TABLE configurations(cpe INTEGER NOT NULL REFERENCES cpes(id), "
+    f"cve TEXT NOT NULL, feed INTEGER NOT NULL, PRIMARY KEY(cve, feed, cpe), {_CHILD_FOREIGN_KEY})",
+    "CREATE INDEX configurations_cpe ON configurations(cpe)",
 )
-
-CVE_TABLE_CREATE_V0 = (
-    "CREATE TABLE IF NOT EXISTS cves("
-    "id VARCHAR DESC NOT NULL, "
-    "feed REFERENCES feeds (rowid) NOT NULL, "
-    "published INTEGER NOT NULL, "
-    "last_modified INTEGER NOT NULL, "
-    "impact_vector VARCHAR NULL, "
-    "base_score REAL NULL, "
-    "severity INTEGER NOT NULL, "
-    "PRIMARY KEY (id, feed)"
-    ")"
-)
-
-CVE_TABLE_CREATE_V1 = (
-    "CREATE TABLE IF NOT EXISTS cves("
-    "id VARCHAR DESC NOT NULL, "
-    "feed REFERENCES feeds (rowid) NOT NULL, "
-    "published INTEGER NOT NULL, "
-    "last_modified INTEGER NOT NULL, "
-    "impact_vector VARCHAR NULL, "
-    "base_score REAL NULL, "
-    "severity INTEGER NOT NULL, "
-    "configurations VARCHAR NULL, "
-    "PRIMARY KEY (id, feed)"
-    ")"
-)
-
-DESCRIPTIONS_TABLE_CREATE = (
-    "CREATE TABLE IF NOT EXISTS descriptions("
-    "cve REFERENCES cves (id) NOT NULL, "
-    "lang VARCHAR NOT NULL DEFAULT \"en\", "
-    "description VARCHAR NOT NULL"
-    ")"
-)
-
-REFERENCES_TABLE_CREATE = (
-    "CREATE TABLE IF NOT EXISTS refs("
-    "cve REFERENCES cves (id) NOT NULL, "
-    "name VARCHAR NULL, "
-    "url VARCHAR NULL"
-    ")"
-)
+CVERow = tuple[str, int, float, float, str | None, float | None, int, str, str | None]
+_SORT_COLUMNS = {
+    Sort.CVE_ID: "c.id",
+    Sort.DESCRIPTION: "d.description",
+    Sort.PUBLISHED_DATE: "c.published",
+    Sort.LAST_MODIFIED_DATE: "c.last_modified",
+    Sort.IMPACT: "c.base_score",
+    Sort.SEVERITY: "c.severity",
+}
+_DATE_COLUMNS: dict[type[SearchQuery], tuple[str, str]] = {
+    BeforePublishedDateQuery: ("c.published", "<="),
+    BeforeModifiedDateQuery: ("c.last_modified", "<="),
+    AfterPublishedDateQuery: ("c.published", ">="),
+    AfterModifiedDateQuery: ("c.last_modified", ">="),
+}
 
 
-CPES_TABLE_CREATE = (
-    "CREATE TABLE IF NOT EXISTS cpes("
-    "part VARCHAR NOT NULL, "
-    "vendor VARCHAR NULL, "
-    "product VARCHAR NULL, "
-    "version VARCHAR NULL, "
-    "update_str VARCHAR NULL, "
-    "edition VARCHAR NULL, "
-    "language VARCHAR NULL, "
-    "sw_edition VARCHAR NULL, "
-    "target_sw VARCHAR NULL, "
-    "other VARCHAR NULL"
-    ")"
-)
+def _timestamp(value: datetime) -> float:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.timestamp()
 
 
-CONFIGURATIONS_TABLE_CREATE = (
-    "CREATE TABLE IF NOT EXISTS configurations("
-    "cpe REFERENCES cpes(rowid) NOT NULL, "
-    "cve REFERENCES cves(id) NOT NULL, "
-    "PRIMARY KEY (cpe, cve)"
-    ")"
-)
+def _enable_foreign_keys(connection: Connection) -> None:
+    connection.execute("PRAGMA foreign_keys = ON")
+    if connection.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
+        raise ValueError(
+            "CVEdb requires foreign-key enforcement; finish the current transaction before "
+            "opening or creating the database"
+        )
 
 
-def register_schema(version: int):
-    def decorator(cls):
-        if version in SCHEMAS:
-            raise TypeError(f"Schema version {version} is already registered to class {SCHEMAS[version].__name__}")
-        SCHEMAS[version] = cls
-        setattr(cls, "version", version)
-        return cls
-    return decorator
+def _impact(vector: str | None, cve_id: str) -> CVSS2 | CVSS3 | None:
+    if vector is None:
+        return None
+    try:
+        return CVSS3(vector)
+    except CVSSError:
+        try:
+            return CVSS2(vector)
+        except CVSSError as error:
+            raise ValueError(
+                f"Invalid stored CVSS vector for {cve_id}: {vector!r}; reimport this record"
+            ) from error
 
 
-class Schema(ABC):
-    version: int
+class Schema:
+    """The supported feed-aware database format.
 
-    def __init__(self, connection: Connection):
-        self.connection: Connection = connection
+    Version 2 replaces older formats whose child metadata cannot be assigned to
+    feeds reliably. Older files are preserved and must be rebuilt separately.
+    """
+
+    version = 2
+
+    def __init__(self, connection: Connection) -> None:
+        self.connection = connection
 
     def path(self) -> str:
+        """Return the connection's main database filename."""
         for _, name, filename in self.connection.execute("PRAGMA database_list"):
-            if name == "main" and filename is not None:
-                return filename
-        raise ValueError(f"Unknown database path for connection {self.connection}")
+            if name == "main":
+                return str(filename)
+        raise ValueError("The SQLite connection has no main database")
+
+    @staticmethod
+    def latest() -> type["Schema"]:
+        """Return the sole supported schema implementation."""
+        return Schema
 
     @staticmethod
     def open(connection: Connection) -> "Schema":
-        c = connection.cursor()
-        c.execute("PRAGMA user_version")
-        schema_version: int = c.fetchone()[0]
-        latest_version = Schema.latest()
-        if schema_version not in SCHEMAS:
-            raise ValueError(f"Database is using schema version {schema_version}, "
-                             f"but expected at most {Schema.latest().version}")
-        elif schema_version == 0:
-            # see if this is just a blank database
-            c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='cves'")
-            if len(c.fetchall()) == 0:
-                # this is a blank database, so start from scratch with the latest version
-                return latest_version.create(connection)
-            # this is actually a database version 0
-        schema = SCHEMAS[schema_version]
-        if schema.version < latest_version.version:
-            if sys.stderr.isatty() and sys.stdin.isatty():
-                sys.stderr.write(f"The database is currently in version {schema_version}, but the latest version is "
-                                 f"{latest_version.version}.\n")
-                while True:
-                    sys.stderr.write("Would you like to upgrade the database? [Yn] ")
-                    sys.stderr.flush()
-                    choice = input().lower()
-                    if choice in ("y", "n", ""):
-                        break
-                if choice != "n":
-                    return latest_version.migrate(schema(connection))
-        return schema(connection)
+        """Open the current schema or initialize a blank database.
+
+        Raises:
+            ValueError: An existing format requires a separate rebuild, is newer
+                than supported, or cannot enforce foreign keys.
+        """
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        tables = connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+        if not tables and version == 0:
+            return Schema.create(connection)
+        if version > Schema.version:
+            raise ValueError(f"Database schema {version} is newer than supported version 2")
+        if version != Schema.version:
+            raise ValueError(
+                f"Database schema {version} requires rebuilding at a separate database path. "
+                "Keep the original file, create a new database, and reimport custom feeds; "
+                "older records contain ambiguous or missing metadata"
+            )
+        _enable_foreign_keys(connection)
+        return Schema(connection)
 
     @classmethod
-    @abstractmethod
-    def migrate_from_previous(cls: Type[S], previous_schema: "Schema") -> S:
-        raise NotImplementedError()
-
-    @classmethod
-    def migrate(cls: Type[S], older_schema: "Schema") -> S:
-        if older_schema.version > cls.version:
-            raise ValueError(f"Schema {older_schema} is newer than {cls.__name}")
-        while older_schema.version < cls.version:
-            prev_version = older_schema
-            older_schema = older_schema.next_version().migrate_from_previous(older_schema)
-            if prev_version is older_schema:
-                # the migration failed, so return a best effort
-                return older_schema
-        return older_schema
-
-    @classmethod
-    @abstractmethod
-    def create(cls: Type[S], connection: Connection) -> S:
-        raise NotImplementedError()
-
-    @classmethod
-    def prior_version(cls) -> Optional[Type["Schema"]]:
-        if cls.version == 0:
-            return None
-        else:
-            return SCHEMAS[cls.version - 1]
-
-    @classmethod
-    def next_version(cls) -> Optional[Type["Schema"]]:
-        return SCHEMAS.get(cls.version + 1, None)
-
-    @staticmethod
-    def latest() -> Type["Schema"]:
-        return SCHEMAS[max(SCHEMAS.keys())]
-
-    @abstractmethod
-    def feed_id(self, name: str) -> int:
-        raise NotImplementedError()
-
-    @abstractmethod
-    def add(self, cve: CVE, source_feed: int):
-        raise NotImplementedError()
-
-    @abstractmethod
-    def cve_iter(self, rows: Iterator[Tuple[Union[float, int, str], ...]]) -> Iterator[CVE]:
-        raise NotImplementedError()
-
-    @abstractmethod
-    def search(
-            self,
-            *queries: Union[str, SearchQuery],
-            db_data,
-            sort: Iterable[Sort] = (Sort.CVE_ID,),
-            ascending: bool = True,
-    ) -> Iterator[CVE]:
-        raise NotImplementedError()
-
-
-@register_schema(0)
-class SchemaV0(Schema):
-    @classmethod
-    def create(cls: Type[S], connection: Connection, cve_table_create=CVE_TABLE_CREATE_V0) -> S:
-        connection.execute(FEED_TABLE_CREATE)
-        connection.execute(cve_table_create)
-        connection.execute(DESCRIPTIONS_TABLE_CREATE)
-        connection.execute("PRAGMA user_version = 0")
+    def create(cls, connection: Connection) -> "Schema":
+        """Create schema version 2 without replacing any existing tables."""
+        _enable_foreign_keys(connection)
+        connection.execute("SAVEPOINT cvedb_schema")
+        try:
+            for statement in _TABLES:
+                connection.execute(statement)
+            connection.execute("PRAGMA user_version = 2")
+        except BaseException:
+            connection.execute("ROLLBACK TO cvedb_schema")
+            connection.execute("RELEASE cvedb_schema")
+            raise
+        connection.execute("RELEASE cvedb_schema")
         return cls(connection)
 
     def feed_id(self, name: str) -> int:
-        c = self.connection.cursor()
-        c.execute(f"INSERT OR IGNORE INTO feeds (name) VALUES (?)", (name,))
-        if c.lastrowid is not None and c.lastrowid > 0:
-            return c.lastrowid
-        else:
-            c.execute("SELECT rowid FROM feeds WHERE name = ?", (name,))
-            return c.fetchone()[0]
+        """Return the requested feed's identity regardless of previous inserts."""
+        row = self.connection.execute("SELECT id FROM feeds WHERE name = ?", (name,)).fetchone()
+        if row is not None:
+            return int(row[0])
+        self.connection.execute("INSERT OR IGNORE INTO feeds(name) VALUES (?)", (name,))
+        row = self.connection.execute("SELECT id FROM feeds WHERE name = ?", (name,)).fetchone()
+        if row is None:
+            raise ValueError(f"Cannot resolve feed {name!r} after insertion")
+        return int(row[0])
 
-    @classmethod
-    def migrate_from_previous(cls, previous_schema: Schema) -> "SchemaV0":
-        raise ValueError("Schema version 0 has no previous version from which to migrate.")
+    def add(self, cve: CVE, source_feed: int) -> None:
+        """Replace a feed's CVE and children atomically without committing the owner.
 
-    def add(self, cve: CVE, source_feed: int, **extra_cols):
-        if cve.impact is None:
-            impact_vector = None
-            base_score = None
-        else:
-            impact_vector = cve.impact.vector
-            base_score = float(cve.impact.base_score)
-        with self.connection as c:
-            col_names = []
-            col_values = []
-            for name, value in extra_cols.items():
-                col_names.append(name)
-                col_values.append(value)
-            extra_col_names = "".join(f", {col}" for col in col_names)
-            c.execute(
-                "INSERT OR REPLACE INTO cves "
-                f"(id, feed, published, last_modified, impact_vector, base_score, severity{extra_col_names}) "
-                f"VALUES (?, ?, ?, ?, ?, ?, ?{', ?' * len(extra_cols)})", [
-                    cve.cve_id, source_feed, cve.published_date.astimezone().timestamp(),
-                    cve.last_modified_date.astimezone().timestamp(), impact_vector, base_score, int(cve.severity)
-                ] + col_values
+        The caller commits or rolls back the surrounding feed update. A failed
+        child insertion restores the previous complete record even if the caller
+        catches that error and continues its transaction.
+        """
+        if not self.connection.in_transaction:
+            self.connection.execute("BEGIN")
+        self.connection.execute("SAVEPOINT cvedb_record")
+        try:
+            self._replace_record(cve, source_feed)
+        except BaseException:
+            self.connection.execute("ROLLBACK TO cvedb_record")
+            self.connection.execute("RELEASE cvedb_record")
+            raise
+        self.connection.execute("RELEASE cvedb_record")
+
+    def _replace_record(self, cve: CVE, feed: int) -> None:
+        key = (cve.cve_id, feed)
+        removed = self.connection.execute(
+            "SELECT cpe FROM configurations WHERE cve=? AND feed=?", key
+        ).fetchall()
+        self.connection.execute("DELETE FROM cves WHERE id=? AND feed=?", key)
+        vector = None if cve.impact is None else cve.impact.vector
+        score = (
+            None
+            if cve.impact is None or cve.impact.base_score is None
+            else float(cve.impact.base_score)
+        )
+        self.connection.execute(
+            "INSERT INTO cves VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                *key,
+                _timestamp(cve.published_date),
+                _timestamp(cve.last_modified_date),
+                vector,
+                score,
+                int(cve.severity),
+                cve.configurations.dumps(),
+                cve.assigner,
+            ),
+        )
+        self._add_children(cve, feed)
+        for (cpe_id,) in removed:
+            self.connection.execute(
+                "DELETE FROM cpes WHERE id=? AND NOT EXISTS "
+                "(SELECT 1 FROM configurations WHERE cpe=cpes.id)",
+                (cpe_id,),
             )
-            for description in cve.descriptions:
-                c.execute(
-                    "INSERT OR REPLACE INTO descriptions "
-                    "(cve, lang, description) "
-                    "VALUES (?, ?, ?)", (
-                        cve.cve_id, description.lang, description.value
-                    )
+
+    def _add_children(self, cve: CVE, feed: int) -> None:
+        self.connection.executemany(
+            "INSERT INTO descriptions VALUES (?, ?, ?, ?, ?)",
+            (
+                (cve.cve_id, feed, i, value.lang, value.value)
+                for i, value in enumerate(cve.descriptions)
+            ),
+        )
+        self.connection.executemany(
+            "INSERT INTO refs VALUES (?, ?, ?, ?, ?)",
+            (
+                (cve.cve_id, feed, i, value.name, value.url)
+                for i, value in enumerate(cve.references)
+            ),
+        )
+        for criterion in cve.configurations.candidate_criteria():
+            for cpe in criterion.vulnerable_cpes():
+                cpe_id = self._cpe_id(cpe)
+                self.connection.execute(
+                    "INSERT OR IGNORE INTO configurations VALUES (?, ?, ?)",
+                    (cpe_id, cve.cve_id, feed),
                 )
 
-    def cve_iter(
-            self,
-            rows: Iterator[Tuple[Union[float, int, str], ...]],
-            extra_row_handler: Callable[[Tuple[Union[float, int, str], ...], Dict[str, Any]], Any] = lambda *_: None
-    ) -> Iterator[CVE]:
-        for cve_id, _, published, last_modified, impact_vector, *extra_rows in rows:
-            if impact_vector is None:
-                impact = None
-            else:
-                try:
-                    impact = CVSS3(impact_vector)
-                except CVSSError:
-                    try:
-                        impact = CVSS2(impact_vector)
-                    except CVSSError:
-                        impact = None
-            d = self.connection.cursor()
-            d.execute(f"SELECT lang, description FROM descriptions WHERE cve = ?", (cve_id,))
-            descriptions = tuple(Description(lang, desc) for lang, desc in d.fetchall())
-            kwargs = {}
-            if extra_rows:
-                extra_row_handler(extra_rows, kwargs)
-            yield CVE(
-                cve_id=cve_id,
-                published_date=datetime.fromtimestamp(published, timezone.utc),
-                last_modified_date=datetime.fromtimestamp(last_modified, timezone.utc),
-                impact=impact,
-                descriptions=descriptions,
-                references=(),  # References are implemented in SchemaV1
-                assigner=None,
-                **kwargs
-            )
+    def _cpe_id(self, cpe: CPE) -> int:
+        values = tuple(str(getattr(cpe, field)) for field in CPE_COLUMNS)
+        self.connection.execute(
+            f"INSERT OR IGNORE INTO cpes({_CPE_FIELDS}) VALUES ({_CPE_VALUES})", values
+        )
+        row = self.connection.execute(f"SELECT id FROM cpes WHERE {_CPE_LOOKUP}", values).fetchone()
+        if row is None:
+            raise ValueError(f"Cannot resolve indexed CPE after insertion: {cpe}")
+        return int(row[0])
+
+    def cve_iter(self, rows: Iterable[tuple[object, ...]]) -> Iterator[CVE]:
+        """Hydrate feed-scoped records with their ordered metadata."""
+        for row in rows:
+            yield self._cve(cast(CVERow, row))
+
+    def _cve(self, row: CVERow) -> CVE:
+        cve_id, feed, published, modified, vector, _, _, serialized, assigner = row
+        descriptions = self.connection.execute(
+            "SELECT lang, description FROM descriptions WHERE cve=? AND feed=? ORDER BY position",
+            (cve_id, feed),
+        )
+        references = self.connection.execute(
+            "SELECT url, name FROM refs WHERE cve=? AND feed=? ORDER BY position", (cve_id, feed)
+        )
+        try:
+            configurations = Testable.loads(serialized)
+        except (ValueError, TypeError, KeyError, IndexError) as error:
+            raise ValueError(
+                f"Invalid stored configurations for {cve_id}; reimport this record"
+            ) from error
+        if not isinstance(configurations, Configurations):
+            raise ValueError(f"Invalid stored configurations for {cve_id}; reimport this record")
+        return CVE(
+            cve_id=cve_id,
+            published_date=datetime.fromtimestamp(published, timezone.utc),
+            last_modified_date=datetime.fromtimestamp(modified, timezone.utc),
+            impact=_impact(vector, cve_id),
+            descriptions=tuple(Description(*d) for d in descriptions),
+            references=tuple(Reference(*r) for r in references),
+            assigner=assigner,
+            configurations=configurations,
+        )
 
     @classmethod
-    def to_query(cls, query: SearchQuery) -> Optional[Select]:
+    def to_query(cls, query: SearchQuery) -> Select | None:
+        """Prepare a conservative SQL predicate for supported queries."""
+        if type(query) in (CPEQuery, EnvironmentQuery):
+            return Select("", "", where=TRUE)
         if isinstance(query, TermQuery):
-            query_text = query.query
-            description_query = "d.description"
-            id_query = "c.id"
-            if not query.case_sensitive:
-                query_text = query_text.upper()
-                description_query = f"UPPER({description_query})"
-                id_query = f"UPPER({id_query})"
-            return Select("", "", where=SimpleQuery(
-                f"({description_query} LIKE ? OR {id_query} LIKE ?)"
-            ), params=[f"%{query_text}%", f"%{query_text}%"])
-        elif isinstance(query, BeforePublishedDateQuery):
-            return Select("", "", where=SimpleQuery("c.published <= ?"),
-                          params=[int(query.date.astimezone().timestamp())])
-        elif isinstance(query, BeforeModifiedDateQuery):
-            return Select("", "", where=SimpleQuery("c.last_modified <= ?"),
-                          params=[int(query.date.astimezone().timestamp())])
-        elif isinstance(query, AfterPublishedDateQuery):
-            return Select("", "", where=SimpleQuery("c.published >= ?"),
-                          params=[int(query.date.astimezone().timestamp())])
-        elif isinstance(query, AfterModifiedDateQuery):
-            return Select("", "", where=SimpleQuery("c.last_modified >= ?"),
-                          params=[int(query.date.astimezone().timestamp())])
-        elif isinstance(query, CompoundQuery):
-            if len(query.sub_queries) == 0:
-                return Select("", "")
-            elif len(query.sub_queries) == 1:
-                return cls.to_sql_clause(query.sub_queries[0])
-            select: Optional[Select] = None
-            sub_selects: List[Select] = []
-            params = []
-            for sub_query in query.sub_queries:
-                sub_select = cls.to_query(sub_query)
-                if sub_select is None:
-                    return None
-                sub_selects.append(sub_select)
-                params.extend(sub_select.params)
-            if isinstance(query, OrQuery):
-                return Select("", "", where=Or(*(s.where for s in sub_selects if s.where is not None)), params=params)
-            else:
-                return Select("", "", where=And(*(s.where for s in sub_selects if s.where is not None)), params=params)
-        else:
-            return None
+            text = query.query if query.case_sensitive else query.query.upper()
+            description = "d.description" if query.case_sensitive else "UPPER(d.description)"
+            identity = "c.id" if query.case_sensitive else "UPPER(c.id)"
+            return Select(
+                "",
+                "",
+                where=SimpleQuery(f"({description} LIKE ? OR {identity} LIKE ?)"),
+                params=[f"%{text}%", f"%{text}%"],
+            )
+        if isinstance(query, AbstractDateQuery) and type(query) in _DATE_COLUMNS:
+            column, operator = _DATE_COLUMNS[type(query)]
+            return Select(
+                "", "", where=SimpleQuery(f"{column} {operator} ?"), params=[_timestamp(query.date)]
+            )
+        if isinstance(query, CompoundQuery):
+            return cls._compound_query(query)
+        return None
+
+    @classmethod
+    def _compound_query(cls, query: CompoundQuery) -> Select | None:
+        children = []
+        params = []
+        for child in query.sub_queries:
+            converted = cls.to_query(child)
+            if converted is None:
+                return None
+            children.append(converted.where if converted.where is not None else TRUE)
+            params.extend(converted.params)
+        combine = Or if isinstance(query, OrQuery) else And
+        return Select("", "", where=combine(*children), params=params)
+
+    def finalize_query(self, select: Select) -> None:
+        """Join metadata by full identity without excluding records lacking descriptions."""
+        select.columns = "DISTINCT c.*"
+        select.from_tables = "cves c LEFT JOIN descriptions d ON d.cve=c.id AND d.feed=c.feed"
 
     def search(
-            self,
-            *queries: Union[str, SearchQuery],
-            db_data,
-            sort: Iterable[Sort] = (Sort.CVE_ID,),
-            ascending: bool = True
+        self,
+        *queries: str | SearchQuery,
+        db_data: "CVEdbData",
+        sort: Iterable[Sort] = (Sort.CVE_ID,),
+        ascending: bool = True,
     ) -> Iterator[CVE]:
+        """Search supported SQL candidates and apply the complete Python predicate."""
         query = Data.make_query(*queries)
         select = self.to_query(query)
         if select is None:
-            # the query could not be converted to a SQL query
             raise ValueError("The query could not be converted to a SQL query")
-        feeds_where_clause = SimpleQuery(f"c.feed IN ({', '.join('?' * len(db_data.feeds)) })")
-        params = [feed.feed_id for feed in db_data.feeds]
-        if select.where is None:
-            select.where = feeds_where_clause
-            select.params = params
-        else:
-            select.where = And(select.where, feeds_where_clause)
-            select.params.extend(params)
-        c = self.connection.cursor()
-        if sort:
-            components = []
-            asc = ["DESC", "ASC"][ascending]
-            for s in sort:
-                if s == Sort.CVE_ID:
-                    components.append("c.id")
-                elif s == Sort.DESCRIPTION:
-                    components.append("d.description")
-                elif s == Sort.LAST_MODIFIED_DATE:
-                    components.append("c.last_modified")
-                elif s == Sort.PUBLISHED_DATE:
-                    components.append("c.published")
-                elif s == Sort.IMPACT:
-                    components.append("c.base_score")
-                elif s == Sort.SEVERITY:
-                    components.append("c.severity")
-                else:
-                    raise NotImplementedError(f"TODO: Add support for {s!r}")
-                components[-1] = f"{components[-1]} {asc}"
-            select.order_by = ", ".join(components)
+        feed_ids = [feed.feed_id for feed in db_data.feeds]
+        feeds = SimpleQuery(f"c.feed IN ({', '.join('?' for _ in feed_ids)})")
+        select.where = feeds if select.where is None else And(select.where, feeds)
+        select.params.extend(feed_ids)
+        direction = "ASC" if ascending else "DESC"
+        select.order_by = ", ".join(f"{_SORT_COLUMNS[value]} {direction}" for value in sort) or None
         self.finalize_query(select)
-        c.execute(select.to_sql(), select.params)
-        # The following assumes that all feeds have the same schema, which should always be true
-        for cve in self.cve_iter(c.fetchall()):
+        rows = self.connection.execute(select.to_sql(), select.params)
+        for cve in self.cve_iter(rows):
             if query.matches(cve):
-                yield cve
-
-    def finalize_query(self, select: Select):
-        select.columns = "DISTINCT c.*"
-        select.from_tables = "descriptions d INNER JOIN cves c ON d.cve = c.id"
-
-
-class _CPEQuery(Query):
-    def __init__(self, query: CPEQuery):
-        self.query: CPEQuery = query
-
-    def to_sql(self) -> str:
-        assert False  # This code should never be executed
-        return ""
-
-
-@register_schema(1)
-class SchemaV1(SchemaV0):
-    @classmethod
-    def create(cls, connection: Connection) -> "SchemaV1":
-        super().create(connection, cve_table_create=CVE_TABLE_CREATE_V1)
-        connection.execute(REFERENCES_TABLE_CREATE)
-        connection.execute(CPES_TABLE_CREATE)
-        connection.execute(CONFIGURATIONS_TABLE_CREATE)
-        connection.execute("PRAGMA user_version = 1")
-        return cls(connection)
-
-    @classmethod
-    def migrate_from_previous(cls: Type[S], previous_schema: SchemaV0) -> S:
-        message = "There is no way to migrate from schema version 0 to version 1 without re-downloading all CVEs."
-        if not sys.stdin.isatty():
-            try:
-                path = previous_schema.path()
-            except ValueError:
-                path = "the database file"
-            if sys.stderr.isatty():
-                sys.stderr.write(f"Warning: {message} Continuing with schema version 0. "
-                                 f"To force an upgrade to version 1, delete {path}.\n")
-                return previous_schema
-            else:
-                raise ValueError(f"{message} To force an upgrade to version 1, delete {path}.")
-        sys.stderr.write(f"{message}\n")
-        while True:
-            sys.stderr.write("Upgrade to schema version 1 and re-download all CVEs? [Yn] ")
-            choice = input().lower()
-            if choice in ("y", "n", ""):
-                break
-        if choice == "n":
-            return previous_schema
-        previous_schema.connection.execute("DROP TABLE IF EXISTS cves")
-        previous_schema.connection.execute("DROP TABLE IF EXISTS feeds")
-        previous_schema.connection.execute("DROP TABLE IF EXISTS descriptions")
-        return SchemaV1.create(previous_schema.connection)
-
-    def add(self, cve: CVE, source_feed: int, **extra_cols):
-        if "configurations" not in extra_cols:
-            extra_cols["configurations"] = cve.configurations.dumps()
-        super().add(cve, source_feed, **extra_cols)
-        for ref in cve.references:
-            self.connection.execute(
-                "INSERT OR REPLACE INTO refs "
-                "(cve, name, url) "
-                "VALUES (?, ?, ?)", (
-                    cve.cve_id, ref.name, ref.url
-                )
-            )
-        c = self.connection.cursor()
-        cols = ("part", "vendor", "product", "version", "update_str", "edition", "language", "sw_edition", "target_sw",
-                "other")
-        col_names = ", ".join(cols)
-        for cpe in cve.configurations.vulnerable_cpes():
-            c.execute(
-                "INSERT OR IGNORE INTO cpes ("
-                f"{col_names}"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ",
-                [str(c) for c in
-                    (cpe.part.value, cpe.vendor, cpe.product, cpe.version, cpe.update, cpe.edition, cpe.lang,
-                     cpe.sw_edition, cpe.target_sw, cpe.other)]
-            )
-            if c.lastrowid is None:
-                # the CPE already existed
-                args = " AND ".join(f"{col} = ?" for col in cols)
-                c.execute(f"SELECT rowid FROM cpes WHERE {args}", (cpe.part.value, cpe.vendor, cpe.product, cpe.version,
-                                                                   cpe.update, cpe.edition, cpe.lang,
-                                                                   cpe.sw_edition, cpe.target_sw, cpe.other))
-                cpe_row = c.fetchone()[0]
-            else:
-                cpe_row = c.lastrowid
-            c.execute("INSERT OR REPLACE INTO configurations (cpe, cve) VALUES (?, ?)", (cpe_row, cve.cve_id))
-
-    @classmethod
-    def to_query(cls, query: SearchQuery) -> Optional[Select]:
-        if isinstance(query, CPEQuery):
-            return Select("", "", where=_CPEQuery(query))
-        else:
-            return super().to_query(query)
-
-    def finalize_query(self, select: Select):
-        cpe_queries = []
-        for query in select.where.traverse():
-            if isinstance(query, _CPEQuery):
-                cpe_queries.append(query.query.cpe)
-                query.remove_from_parent()
-        super().finalize_query(select)
-        if cpe_queries:
-            select.from_tables = "(((descriptions d INNER JOIN cves c ON d.cve = c.id) " \
-                                 "INNER JOIN configurations f ON f.cve = c.id) "\
-                                 "INNER JOIN cpes p ON p.rowid == f.cpe)"
-            if select.where is None:
-                select.where = TRUE
-            for query in cpe_queries:
-                for attr in (
-                        "part", "vendor", "product", "version", "update", "edition", "lang", "sw_edition", "target_sw",
-                        "target_hw", "other"
-                ):
-                    value = getattr(query, attr)
-                    if isinstance(value, str):
-                        select.where = And.create(select.where, SimpleQuery(f"p.{attr} = ?"))
-                        select.params.append(value)
-
-    def cve_iter(
-            self,
-            rows: Iterator[Tuple[Union[float, int, str], ...]],
-            extra_row_handler: Callable[[Tuple[Union[float, int, str], ...], Dict[str, Any]], Any] = lambda *_: None
-    ) -> Iterator[CVE]:
-        def handle_configurations(extra_rows: Tuple[Union[float, int, str], ...], kwargs: Dict[str, Any]):
-            _, _, configurations, *extra_rows = extra_rows
-            kwargs["configurations"] = Configurations.loads(configurations)
-            if extra_rows:
-                extra_row_handler(extra_rows, kwargs)
-
-        for cve in super().cve_iter(rows, extra_row_handler=handle_configurations):
-            d = self.connection.cursor()
-            d.execute(f"SELECT url, name FROM refs WHERE cve = ?", (cve.cve_id,))
-            references = tuple(Reference(url, name) for url, name in d.fetchall())
-            if references:
-                yield CVE(
-                    cve_id=cve.cve_id,
-                    published_date=cve.published_date,
-                    last_modified_date=cve.last_modified_date,
-                    impact=cve.impact,
-                    descriptions=cve.descriptions,
-                    references=references,
-                    assigner=cve.assigner,
-                    configurations=cve.configurations
-                )
-            else:
                 yield cve

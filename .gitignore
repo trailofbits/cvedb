@@ -5,3 +5,5 @@
 .ruff_cache/
 __pycache__/
 *.egg-info/
+.venv310/
+.prek-cache/

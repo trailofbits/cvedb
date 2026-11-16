@@ -1,18 +1,20 @@
+files: >-
+  (?x)^(
+    cvedb/(cpe|cve|nvd|schemas|search|sql)\.py
+    |test/test_(cpe_matching|applicability|storage|nvd)\.py
+  )$
 repos:
   - repo: local
     hooks:
-      - id: ruff-cpe
-        name: Lint CPE fixes
+      - id: ruff
+        name: Lint correctness fixes
         language: system
         entry: .venv/bin/ruff check
-        files: ^(cvedb/cpe\.py|test/test_cpe_matching\.py)$
-      - id: ruff-format-cpe
-        name: Check CPE formatting
+      - id: ruff-format
+        name: Check correctness formatting
         language: system
         entry: .venv/bin/ruff format --check
-        files: ^(cvedb/cpe\.py|test/test_cpe_matching\.py)$
-      - id: ty-cpe
-        name: Check CPE types
+      - id: ty
+        name: Check correctness types
         language: system
         entry: .venv/bin/ty check --error-on-warning
-        files: ^(cvedb/cpe\.py|test/test_cpe_matching\.py)$

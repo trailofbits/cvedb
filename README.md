@@ -83,7 +83,7 @@ maintained by NIST and is released in the public domain.
 are case-insensitive. Unescaped `*` matches zero or more characters, and unescaped
 `?` matches zero or one character, at the beginning or end of a source attribute.
 Escape literal wildcard characters with a backslash. Unescaped wildcards in target
-strings have an undefined comparison in the [CPE name matching specification](https://nvlpubs.nist.gov/nistpubs/legacy/ir/nistir7696.pdf)
+strings have an undefined comparison in the [CPE name matching specification][cpe-name-matching].
 and raise `cvedb.cpe.TestError`.
 
 Use `Logical.ANY` for an unconstrained component. A source `Logical.ANY` matches
@@ -116,3 +116,60 @@ uv pip install -e '.[dev]'
 .venv/bin/python -m pytest -q test/test_cpe_matching.py
 prek run --files cvedb/cpe.py test/test_cpe_matching.py
 ```
+
+## Applicability searches
+
+A product search identifies candidate CVEs associated with a vulnerable-marked
+CPE criterion. It preserves version ranges but does not prove that required
+platforms are installed. Candidate associations include marked criteria inside
+negated expressions; use inventory evaluation to determine the expression's
+Boolean result. This distinction follows the NVD's
+[CPE-based search and applicability model](https://nvd.nist.gov/developers/vulnerabilities).
+
+```python
+from cvedb.cpe import CPE
+from cvedb.search import CPEQuery, EnvironmentQuery
+from cvedb.db import CVEdb
+
+application = CPE(vendor="example", product="widget", version="3.0")
+platform = CPE(vendor="example", product="platform", version="1.0")
+
+with CVEdb.open() as db:
+    candidates = list(db.data().search(CPEQuery(application)))
+    applicable = list(db.data().search(EnvironmentQuery([application, platform])))
+```
+
+Supply the complete inventory and concrete installed CPE names for confirmed
+evaluation. Each positive criterion requires a matching inventory product; AND,
+OR, and explicit negation retain their Boolean meanings. Missing products make
+positive criteria false, so negation can match an empty inventory. Logical ANY
+components remain unconstrained filters under the CPE matching rules.
+
+For a CVE's `configurations`, `match(cpe)` evaluates a singleton inventory,
+`match_inventory(inventory)` evaluates a complete inventory, and
+`match_candidate(cpe)` finds a vulnerable-marked product association.
+`CPEMatch(criterion, vulnerable=False)` marks a required environmental product;
+it does not negate that criterion. Absent applicability data matches no products.
+The marking and expression structure survive serialization and database storage.
+
+Legacy empty-string and null version bounds mean an absent bound. They do not
+replace an exact CPE version with a wildcard. Conflicting meaningful bounds and
+non-string bound values raise an error.
+
+## Database format
+
+Schema version 2 keeps CVEs, descriptions, references, and CPE associations scoped
+to their source feed. It preserves assigners, all CPE components, and the order of
+metadata collections. Reingesting a record replaces its previous child data
+atomically; callers using `Schema.add()` own the surrounding commit or rollback.
+Naive timestamps mean UTC, and timezone offsets and fractional seconds preserve
+the same instant through storage.
+
+Older databases cannot reliably recover feed ownership or vulnerability marking
+from their stored metadata. Opening an old schema raises an error and preserves
+the original file. Create a replacement at a separate path with
+`CVEdb.open("replacement.sqlite")` or `--database replacement.sqlite`. Reimport
+custom feeds into the replacement. Retain the original file until you have
+verified the replacement; CVEdb does not automatically delete or migrate it.
+
+[cpe-name-matching]: https://nvlpubs.nist.gov/nistpubs/legacy/ir/nistir7696.pdf

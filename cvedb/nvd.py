@@ -7,15 +7,23 @@ from datetime import datetime, timezone
 from gzip import decompress
 from importlib.metadata import version as package_version
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, List, Optional, TextIO, Union
+from typing import Any, Dict, Iterable, Iterator, List, Optional, TextIO, Union, cast
 
 from cvss import CVSS2, CVSS3
 from dateutil.parser import isoparse
 from tqdm import tqdm
 
-from cvedb.cpe import And, Negate, Or, Testable, VersionRange, parse_formatted_string
+from cvedb.cpe import And, CPEMatch, Or, Testable, VersionRange, parse_formatted_string
 from cvedb.cve import CVE, Configurations, Description, Reference
 from cvedb.feed import Data, DataSource, Feed
+
+_VERSION_BOUND_FIELDS = (
+    "versionStartIncluding",
+    "versionStartExcluding",
+    "versionEndIncluding",
+    "versionEndExcluding",
+)
+_CRITERION_FIELDS = {"cpe23Uri", "vulnerable", "cpe_name", *_VERSION_BOUND_FIELDS}
 
 BASE_JSON_URL: str = "https://nvd.nist.gov/feeds/json/cve/2.0/nvdcve-2.0-"
 
@@ -23,7 +31,7 @@ PRE_SEED_DATA_DIR: Path = Path(__file__).absolute().parent / "data"
 
 
 def camel_to_underscore(text: str) -> str:
-    def process(i: int, c: str):
+    def process(i: int, c: str) -> str:
         if i == 0:
             return c.lower()
         elif ord("A") <= ord(c) <= ord("Z"):
@@ -80,70 +88,97 @@ class JsonDataSource(DataSource):
         else:
             self.cves = list(cves)
 
-    def __iter__(self) -> Iterator[CVE]:
+    def __iter__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+        self,
+    ) -> Iterator[CVE]:
         return iter(self.cves)
 
     def __len__(self):
         return len(self.cves)
 
     @staticmethod
-    def _parse_config_node(node: Dict[str, Any]) -> Testable:
-        if "cpe23Uri" in node:
-            cpe = parse_formatted_string(node["cpe23Uri"])
-            vs = node.get("versionStartExcluding", None)
-            include_start = vs is None
-            vs = node.get("versionStartIncluding", vs)
-            ve = node.get("versionEndExcluding", None)
-            include_end = ve is None
-            ve = node.get("versionEndIncluding", ve)
-            testable: Testable = cpe
-            if vs is not None or ve is not None:
-                testable = VersionRange(
-                    cpe, start=vs, end=ve, include_start=include_start, include_end=include_end
-                )
-            if node.get("cpe_name"):
-                raise NotImplementedError("Add support for cpe_name key with value")
-            unhandled_keys = node.keys() - {
-                "cpe23Uri",
-                "vulnerable",
-                "versionStartIncluding",
-                "versionStartExcluding",
-                "versionEndIncluding",
-                "versionEndExcluding",
-                "cpe_name",
-            }
-            if unhandled_keys:
-                raise NotImplementedError(
-                    f"Add support for CPE 23 URI node keys {unhandled_keys!r}"
-                )
-            if not node.get("vulnerable", True):
-                return Negate(testable)
-            return testable
-        elif "operator" in node:
-            op_class = {"AND": And, "OR": Or}.get(node["operator"].upper())
-            if op_class is None:
-                raise NotImplementedError(
-                    f"Unimplemented CVE configuration node operator {node['operator']!r}"
-                )
-            return op_class(
-                map(
-                    JsonDataSource._parse_config_node,
-                    itertools.chain(node.get("children", []), node.get("cpe_match", [])),
-                ),
-                negate=not node.get("vulnerable", True),
+    def _parse_version_bound(node: Dict[str, Any], edge: str) -> tuple[str | None, bool]:
+        included, excluded = f"version{edge}Including", f"version{edge}Excluding"
+        bounds: list[str | None] = []
+        for key in (included, excluded):
+            value = node.get(key)
+            if value is not None and not isinstance(value, str):
+                raise ValueError(f"Configuration {key} must be a string or absent")
+            bounds.append(value or None)
+        including, excluding = bounds
+        if including is not None and excluding is not None:
+            raise ValueError(f"Configuration criterion specifies both {included} and {excluded}")
+        return (excluding, False) if excluding is not None else (including, True)
+
+    @staticmethod
+    def _parse_config_leaf(node: Dict[str, Any]) -> CPEMatch:
+        value = node["cpe23Uri"]
+        if not isinstance(value, str) or not value:
+            raise ValueError("Configuration cpe23Uri must be a nonempty string")
+        cpe = parse_formatted_string(value)
+        start, include_start = JsonDataSource._parse_version_bound(node, "Start")
+        end, include_end = JsonDataSource._parse_version_bound(node, "End")
+        criterion = cpe
+        if start is not None or end is not None:
+            criterion = VersionRange(
+                cpe,
+                start=start,
+                end=end,
+                include_start=include_start,
+                include_end=include_end,
             )
-        else:
+        if node.get("cpe_name"):
+            raise NotImplementedError("Add support for cpe_name key with value")
+        if node.keys() - _CRITERION_FIELDS:
+            raise ValueError(
+                f"Unsupported configuration criterion keys: {node.keys() - _CRITERION_FIELDS!r}"
+            )
+        vulnerable = node.get("vulnerable", True)
+        if not isinstance(vulnerable, bool):
+            raise ValueError("A configuration criterion's vulnerable mark must be a boolean")
+        return CPEMatch(criterion, vulnerable)
+
+    @staticmethod
+    def _parse_config_node(node: Dict[str, Any]) -> Testable:
+        if not isinstance(node, dict):
+            raise ValueError("A configuration node must be an object")
+        if "cpe23Uri" in node:
+            return JsonDataSource._parse_config_leaf(node)
+        operator = node.get("operator")
+        if operator is None:
             raise ValueError(f"Unknown configuration node type: {node!r}")
+        op_class = {"AND": And, "OR": Or}.get(str(operator).upper())
+        if op_class is None:
+            raise NotImplementedError(f"Unimplemented CVE configuration node operator {operator!r}")
+        children, matches = node.get("children", []), node.get("cpe_match", [])
+        if not isinstance(children, list) or not isinstance(matches, list):
+            raise ValueError("Configuration node children and operands must be arrays")
+        if not children and not matches:
+            raise ValueError("A populated configuration node must contain children or operands")
+        negate = node.get("negate", False)
+        if not isinstance(negate, bool):
+            raise ValueError("A configuration node's negate flag must be a boolean")
+        return op_class(
+            (
+                JsonDataSource._parse_config_node(child)
+                for child in itertools.chain(children, matches)
+            ),
+            negate=negate,
+        )
 
     @staticmethod
     def parse_configurations(config_dict: Dict[str, Any]) -> Configurations:
+        """Parse optional legacy configurations without inferring universal applicability."""
+        if not isinstance(config_dict, dict):
+            raise ValueError("CVE configurations must be an object")
         if config_dict.get("CVE_data_version", "4.0") != "4.0":
             raise ValueError(
                 f"Unsupported configuration CVE_data_version: {config_dict['CVE_data_version']}"
             )
-        return Configurations(
-            JsonDataSource._parse_config_node(node) for node in config_dict["nodes"]
-        )
+        nodes = config_dict.get("nodes", [])
+        if not isinstance(nodes, list):
+            raise ValueError("Configuration nodes must be an array")
+        return Configurations(JsonDataSource._parse_config_node(node) for node in nodes)
 
     @staticmethod
     def parse_cve(cve_obj: Dict[str, Any]) -> CVE:
@@ -178,7 +213,7 @@ class JsonDataSource(DataSource):
 
     @staticmethod
     def _convert_timestamp(value: str) -> str:
-        timestamp = isoparse(value)
+        timestamp = cast(datetime, isoparse(value))
         if timestamp.tzinfo is None:
             timestamp = timestamp.replace(tzinfo=timezone.utc)
         return timestamp.isoformat()
@@ -201,8 +236,15 @@ class JsonDataSource(DataSource):
 
     @staticmethod
     def _convert_config_node(node: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(node, dict):
+            raise ValueError("A configuration node must be an object")
+        children, criteria = node.get("nodes", []), node.get("cpeMatch", [])
+        if not isinstance(children, list) or not isinstance(criteria, list):
+            raise ValueError("Configuration node children and criteria must be arrays")
         matches = []
-        for match in node.get("cpeMatch", []):
+        for match in criteria:
+            if not isinstance(match, dict) or "criteria" not in match or "vulnerable" not in match:
+                raise ValueError("Configuration criteria require criteria and vulnerable fields")
             converted = {
                 "vulnerable": match["vulnerable"],
                 "cpe23Uri": match["criteria"],
@@ -218,10 +260,8 @@ class JsonDataSource(DataSource):
             matches.append(converted)
         return {
             "operator": node.get("operator", "OR"),
-            "vulnerable": not node.get("negate", False),
-            "children": [
-                JsonDataSource._convert_config_node(child) for child in node.get("nodes", [])
-            ],
+            "negate": node.get("negate", False),
+            "children": [JsonDataSource._convert_config_node(child) for child in children],
             "cpe_match": matches,
         }
 
@@ -317,7 +357,7 @@ def download(url: str, size: Optional[int] = None, show_progress: bool = True) -
     )
     with urllib.request.urlopen(request) as req:
         if not show_progress:
-            return req.read()
+            return cast(bytes, req.read())
         ret = bytearray()
         filename = url[url.rfind("/") + 1 :]
         with tqdm(desc=filename, unit=" b", leave=False) as t:
@@ -341,7 +381,9 @@ class JsonFeed(Feed):
         self.cached_meta_path: Path = PRE_SEED_DATA_DIR / f"nvdcve-1.1-{self.name}.meta"
         self.cached_json_path: Path = PRE_SEED_DATA_DIR / f"nvdcve-1.1-{self.name}.json.gz"
 
-    def reload(self, existing_data: Optional[Data] = None) -> DataSource:
+    def reload(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
+        self, existing_data: Optional[Data] = None
+    ) -> DataSource:
         if existing_data is None or len(existing_data) == 0:
             # Use the bundled feed for the first load when it is available.
             if self.cached_json_path.exists() and self.cached_meta_path.exists():
@@ -352,10 +394,11 @@ class JsonFeed(Feed):
                         )
         with urllib.request.urlopen(self.meta_url) as req:
             new_meta = Meta.load(req)
+        last_modified = None if existing_data is None else existing_data.last_modified_date
         if (
             existing_data is not None
-            and existing_data.last_modified_date is not None
-            and new_meta.last_modified_date <= existing_data.last_modified_date
+            and last_modified is not None
+            and new_meta.last_modified_date <= last_modified
         ):
             # the existing data is newer
             return existing_data
