@@ -4,7 +4,7 @@ from collections.abc import Generator, Iterable, Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from sqlite3 import connect, Connection
+from sqlite3 import connect, Connection, ProgrammingError
 import sys
 from time import time
 from types import TracebackType
@@ -61,7 +61,15 @@ class CVEdbDataSource(Data):
         try:
             yield from self.schema.cve_iter(rows)
         finally:
-            rows.close()
+            try:
+                rows.close()
+            except ProgrammingError:
+                try:
+                    _ = self.connection.in_transaction
+                except ProgrammingError:
+                    pass  # A closed connection no longer permits explicit cursor cleanup.
+                else:
+                    raise
 
     def __len__(  # ty: ignore[missing-override-decorator]  # No override in Python 3.10.
         self,

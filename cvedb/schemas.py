@@ -2,7 +2,7 @@
 
 from collections.abc import Iterable, Iterator
 from datetime import datetime, timezone
-from sqlite3 import Connection
+from sqlite3 import Connection, ProgrammingError
 from typing import TYPE_CHECKING, cast
 
 from cvss import CVSS2, CVSS3, CVSSError
@@ -411,4 +411,12 @@ class Schema:
                 if query.matches(cve):
                     yield cve
         finally:
-            rows.close()
+            try:
+                rows.close()
+            except ProgrammingError:
+                try:
+                    _ = self.connection.in_transaction
+                except ProgrammingError:
+                    pass  # A closed connection no longer permits explicit cursor cleanup.
+                else:
+                    raise
