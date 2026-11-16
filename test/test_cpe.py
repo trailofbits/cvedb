@@ -72,7 +72,7 @@ class TestCPE(TestCase):
         self.assertEqual(cpe.other, Logical.ANY)
         
     def test_configurations_serialization(self):
-        """Regresion test from https://nvd.nist.gov/vuln/detail/CVE-2012-1093
+        r"""Regression test from https://nvd.nist.gov/vuln/detail/CVE-2012-1093
 
             C1
             o=4
