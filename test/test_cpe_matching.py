@@ -224,3 +224,47 @@ class TestLanguageValues(TestCase):
             self.assertEqual(str(value), expected)
             self.assertEqual(parse_formatted_string(str(CPE(lang=value))).lang, value)
         self.assertEqual(Language("en", 5), Language("en", "005"))
+
+
+class TestVersionRangeBoundEncoding(TestCase):
+    def test_empty_constructor_bounds_are_canonical_and_round_trip(self) -> None:
+        for start, end in (("", None), (None, ""), ("", ""), ("", "4"), ("2", "")):
+            for include_start in (False, True):
+                for include_end in (False, True):
+                    with self.subTest(start=start, end=end, flags=(include_start, include_end)):
+                        original = VersionRange(CPE(), start, end, include_start, include_end)
+                        self.assertEqual(original.start, start or None)
+                        self.assertEqual(original.end, end or None)
+                        restored = Testable.loads(original.dumps())
+                        self.assertEqual(original, restored)
+                        assert isinstance(restored, VersionRange)
+                        self.assertEqual(restored.include_start, include_start)
+                        self.assertEqual(restored.include_end, include_end)
+                        for version in ("1", "2", "3", "4", "5"):
+                            candidate = CPE(version=version)
+                            self.assertEqual(original.match(candidate), restored.match(candidate))
+
+    def test_constructor_rejects_line_breaks_with_bound_and_input_context(self) -> None:
+        for name in ("start", "end"):
+            for value in ("2\n3", "2\r3", "\n2", "2\n", "\r2", "2\r", "\n", "\r"):
+                with self.subTest(name=name, value=value):
+                    with self.assertRaises(ValueError) as raised:
+                        if name == "start":
+                            VersionRange(CPE(), start=value)
+                        else:
+                            VersionRange(CPE(), end=value)
+                    self.assertIn(name, str(raised.exception))
+                    self.assertIn(repr(value), str(raised.exception))
+
+    def test_literal_escapes_and_unknown_vendor_bounds_are_preserved(self) -> None:
+        for value in (r"vendor\nrelease", r"vendor\rrelease", "vendor-release"):
+            with self.subTest(value=value):
+                original = VersionRange(CPE(), value, value)
+                self.assertEqual(original.start, value)
+                self.assertEqual(original.end, value)
+                restored = Testable.loads(original.dumps())
+                self.assertEqual(original, restored)
+                self.assertTrue(original.match(CPE(version=value)))
+                self.assertTrue(restored.match(CPE(version=value)))
+                with self.assertRaises(CPEMatchError):
+                    original.match(CPE(version="2"))
