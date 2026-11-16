@@ -1,10 +1,11 @@
 """Differential behavior tests for persistent and in-memory searches."""
 
-from collections.abc import Generator
+from collections.abc import Generator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import sqlite3
+from typing import cast
 
 from cvss import CVSS3
 from hypothesis import given, settings, strategies as st
@@ -15,7 +16,7 @@ from cvedb.cpe import And, CPE, CPEMatch, Negate, VersionRange
 from cvedb.cve import CVE, Configurations, Description, Reference
 from cvedb.db import CVEdb, CVEdbData
 from cvedb.feed import Data, DataSource, Feed, InMemoryData
-from cvedb.schemas import UnsupportedQueryError
+from cvedb.schemas import Schema, UnsupportedQueryError
 from cvedb.search import (
     AfterModifiedDateQuery,
     AfterPublishedDateQuery,
@@ -439,3 +440,101 @@ def test_lazy_sql_searches_can_be_interleaved_on_one_connection(query: TermQuery
         assert next(results) == first
         assert list(stored.search(query)) == [second]
         assert list(results) == [second, third]
+
+
+def test_reopening_schema_and_database_does_not_replace_active_search_function() -> None:
+    records = (_record(1), _record(2))
+    with _views(records) as (stored, _):
+        results = stored.search("alpha")
+        assert isinstance(results, Generator)
+        try:
+            assert next(results) == records[0]
+            reopened = Schema.open(stored.connection)
+            assert reopened.connection is stored.connection
+            other = CVEdb(stored.connection, [_FixtureFeed(records)])
+            assert list(other.data().search("alpha")) == list(records)
+            assert list(results) == [records[1]]
+        finally:
+            results.close()
+
+
+def test_contains_registration_checks_exact_function_name_and_arity() -> None:
+    connection = sqlite3.connect(":memory:")
+    try:
+        connection.create_function("cvedb_contains", 2, lambda left, right: "two arguments")
+        connection.create_function("cvedb_contains_other", 3, lambda *args: 0)
+        db = CVEdb(connection, [_FixtureFeed((_record(),))])
+        assert list(db.data().search("alpha")) == [_record()]
+        row = connection.execute("SELECT cvedb_contains(1, 2)").fetchone()
+        assert row == ("two arguments",)
+    finally:
+        connection.close()
+
+
+class _NoFunctionListConnection(sqlite3.Connection):
+    def execute(  # ty: ignore[missing-override-decorator]  # Python 3.10 lacks override.
+        self, sql: str, parameters: object = ()
+    ) -> sqlite3.Cursor:
+        if sql == "PRAGMA function_list":
+            sql = "PRAGMA cvedb_unrecognized_function_list"
+        values = cast(Sequence[object] | Mapping[str, object], parameters)
+        return super().execute(sql, values)
+
+    def create_function(  # ty: ignore[missing-override-decorator]  # Python 3.10 lacks override.
+        self, name: str, narg: int, func: object, *, deterministic: bool = False
+    ) -> None:
+        raise AssertionError("Cannot register search functions without introspection")
+
+
+def test_missing_function_introspection_uses_eager_memory_fallback() -> None:
+    first = _record(descriptions=(Description("fr", "Straße"),))
+    second = _record(2, descriptions=(Description("en", "beta"),))
+    records = (first, second)
+    connection = sqlite3.connect(":memory:", factory=_NoFunctionListConnection)
+    try:
+        db = CVEdb(connection, [_FixtureFeed(records)])
+        stored = db.data()
+        memory = InMemoryData(NOW, records)
+        queries = (
+            TermQuery("STRASSE"),
+            DescriptionQuery("BETA"),
+            OrQuery(TermQuery("strasse"), AndQuery(TermQuery("beta"), TermQuery("missing"))),
+        )
+        for query in queries:
+            with pytest.raises(UnsupportedQueryError, match="function introspection"):
+                stored.schema.search(query, db_data=stored)
+            actual = list(stored.search(query, sort=[Sort.DESCRIPTION], ascending=False))
+            expected = list(memory.search(query, sort=[Sort.DESCRIPTION], ascending=False))
+            assert actual == expected
+        assert list(CVEdb(connection, [_FixtureFeed(records)]).data().search("STRASSE")) == [first]
+    finally:
+        connection.close()
+
+
+class _FunctionSetupFailureConnection(sqlite3.Connection):
+    fail_introspection = False
+
+    def execute(  # ty: ignore[missing-override-decorator]  # Python 3.10 lacks override.
+        self, sql: str, parameters: object = ()
+    ) -> sqlite3.Cursor:
+        if self.fail_introspection and sql == "PRAGMA function_list":
+            raise sqlite3.OperationalError("function introspection failure")
+        values = cast(Sequence[object] | Mapping[str, object], parameters)
+        return super().execute(sql, values)
+
+    def create_function(  # ty: ignore[missing-override-decorator]  # Python 3.10 lacks override.
+        self, name: str, narg: int, func: object, *, deterministic: bool = False
+    ) -> None:
+        raise sqlite3.OperationalError("function registration failure")
+
+
+@pytest.mark.parametrize("failure", ["introspection", "registration"])
+def test_real_function_setup_errors_propagate(failure: str) -> None:
+    connection = sqlite3.connect(":memory:", factory=_FunctionSetupFailureConnection)
+    assert isinstance(connection, _FunctionSetupFailureConnection)
+    connection.fail_introspection = failure == "introspection"
+    try:
+        with pytest.raises(sqlite3.OperationalError, match=f"function {failure} failure"):
+            Schema.open(connection)
+    finally:
+        connection.close()
