@@ -11,6 +11,7 @@ CVEdb provides a Python library and CLI for querying a local SQLite CVE database
 - `test/`: tests for CPE parsing, serialization, and custom feeds.
 - `pyproject.toml` and `uv.lock`: package metadata, pinned dependencies, checks, and entry point.
 - `scripts/`: distribution verification and installed-package offline smoke checks.
+- `docs/releases.md`: release validation, environment setup, and trusted publishing procedure.
 - `.github/workflows/tests.yml`: CI checks on Python 3.11–3.15. Python 3.11 is the minimum.
 
 ## Build, test, and development commands

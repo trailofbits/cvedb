@@ -71,6 +71,12 @@ lockfile freshness and uses a temporary hashed export; it fails on known
 vulnerabilities, skipped dependencies, or advisory-service errors. Run the audit
 command above when you change dependencies. It requires network access to PyPI.
 
+## Releases
+
+See the [release procedure](docs/releases.md) for version updates, required
+validation, GitHub environment setup, and PyPI trusted publishing. Configure the
+protected `pypi` environment and trusted publisher before publishing a GitHub Release.
+
 ## Command Line Usage
 
 ```console

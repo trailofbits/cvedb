@@ -26,7 +26,7 @@ Project = TypedDict(
 
 def _required_files(root: Path) -> set[str]:
     files = {"README.md", "LICENSE", "pyproject.toml", "uv.lock", "AGENTS.md", "CODEOWNERS"}
-    for directory in ("cvedb", "test", "scripts"):
+    for directory in ("cvedb", "test", "scripts", "docs"):
         for path in (root / directory).rglob("*"):
             if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc":
                 files.add(path.relative_to(root).as_posix())

@@ -54,7 +54,7 @@ exclude-newer = "1 week"
 [tool.uv.build-backend]
 module-root = ""
 source-include = [
-    "test/**", "scripts/**", "AGENTS.md", "CODEOWNERS", "uv.lock", ".github/**",
+    "test/**", "scripts/**", "docs/**", "AGENTS.md", "CODEOWNERS", "uv.lock", ".github/**",
     ".pre-commit-config.yaml", ".gitignore",
 ]
 source-exclude = ["**/__pycache__", "**/*.pyc", "**/*.pyo"]

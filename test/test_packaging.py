@@ -7,9 +7,11 @@ import subprocess
 import tarfile
 from tempfile import TemporaryDirectory
 from unittest import TestCase
+from unittest.mock import patch
 import zipfile
 
 from scripts.verify_dist import verify
+from scripts.check_dist import check_distributions
 
 METADATA = b"""Metadata-Version: 2.4
 Name: cvedb
@@ -176,6 +178,49 @@ class TestDistributions(TestCase):
         self.wheel["test/leftover.py"] = b""
         with self.assertRaisesRegex(ValueError, "outside the package"):
             self.check()
+
+    def command(self, arguments: list[str], **options: object) -> subprocess.CompletedProcess[str]:
+        if arguments[:2] == ["uv", "build"]:
+            distributions(Path(arguments[-1]), self.source, self.wheel)
+        return subprocess.CompletedProcess(arguments, 0)
+
+    def test_retains_only_verified_archives(self) -> None:
+        output = self.target / "output"
+        with patch("scripts.check_dist.subprocess.run", side_effect=self.command):
+            check_distributions(self.root, output)
+        self.assertEqual({path.name for path in output.iterdir()}, {"cvedb.tar.gz", "cvedb.whl"})
+        verify(output / "cvedb.tar.gz", output / "cvedb.whl", self.root)
+
+    def test_failed_validation_does_not_retain_archives(self) -> None:
+        del self.wheel[FEED]
+        output = self.target / "output"
+        with patch("scripts.check_dist.subprocess.run", side_effect=self.command):
+            with self.assertRaisesRegex(ValueError, "missing required files"):
+                check_distributions(self.root, output)
+        self.assertFalse(output.exists())
+
+    def test_failed_installed_check_does_not_retain_archives(self) -> None:
+        def command(arguments: list[str], **options: object) -> subprocess.CompletedProcess[str]:
+            if arguments[-1].endswith("smoke_installed.py"):
+                raise subprocess.CalledProcessError(1, arguments)
+            return self.command(arguments, **options)
+
+        output = self.target / "output"
+        with patch("scripts.check_dist.subprocess.run", side_effect=command):
+            with self.assertRaises(subprocess.CalledProcessError):
+                check_distributions(self.root, output)
+        self.assertFalse(output.exists())
+
+    def test_existing_output_is_preserved(self) -> None:
+        output = self.target / "output"
+        output.mkdir()
+        existing = output / "existing.whl"
+        existing.write_bytes(b"previous artifacts")
+        with patch("scripts.check_dist.subprocess.run", side_effect=self.command):
+            with self.assertRaisesRegex(ValueError, "choose a new directory"):
+                check_distributions(self.root, output)
+        self.assertEqual(list(output.iterdir()), [existing])
+        self.assertEqual(existing.read_bytes(), b"previous artifacts")
 
 
 class TestSnapshotDownload(TestCase):
