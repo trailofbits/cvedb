@@ -76,3 +76,43 @@ It is licensed under the [GNU Lesser General Public License v3.0](LICENSE).
 
 The [CVE database shipped with CVEdb](https://github.com/trailofbits/cvedb/tree/master/cvedb/data) is created and
 maintained by NIST and is released in the public domain.
+
+## CPE matching
+
+`source.match(target)` compares a CPE criterion with a target CPE. String comparisons
+are case-insensitive. Unescaped `*` matches zero or more characters, and unescaped
+`?` matches zero or one character, at the beginning or end of a source attribute.
+Escape literal wildcard characters with a backslash. Unescaped wildcards in target
+strings have an undefined comparison in the [CPE name matching specification](https://nvlpubs.nist.gov/nistpubs/legacy/ir/nistir7696.pdf)
+and raise `cvedb.cpe.TestError`.
+
+Use `Logical.ANY` for an unconstrained component. A source `Logical.ANY` matches
+any target value, and a target `Logical.ANY` leaves a concrete source component
+unconstrained during candidate searches. `Logical.NA` is distinct from a literal
+hyphen and matches only another `Logical.NA` when used in a source criterion.
+
+`VersionRange` checks both boundaries independently. It compares dot-separated
+numeric releases numerically, treating omitted trailing zero components as equal:
+`2.0 < 10.0`, and `1 == 1.0.0`. Supported prerelease suffixes sort before the final
+release in this order: `dev`, `alpha`/`a`, `beta`/`b`, and `pre`/`preview`/`rc`.
+An optional suffix number compares numerically. Hyphens, underscores, or periods
+can separate the suffix and number. CPE escapes are decoded before comparison.
+This is CVEdb's documented ordering policy, not a universal vendor version format.
+An exact version equality is accepted; otherwise unsupported vendor formats raise
+`TestError` instead of guessing. An unbounded range does not require ordering.
+A target version of `Logical.ANY` leaves version unconstrained; `Logical.NA` does
+not satisfy a bounded range.
+
+`parse_formatted_string()` requires exactly one complete CPE 2.3 formatted string.
+It rejects trailing fields, whitespace, and other suffixes. Expression
+serialization handles its record-ending newline separately.
+
+The focused CPE checks use an isolated Python environment with the development
+extras installed. Run them before committing CPE changes:
+
+```sh
+uv venv --python 3.13
+uv pip install -e '.[dev]'
+.venv/bin/python -m pytest -q test/test_cpe_matching.py
+prek run --files cvedb/cpe.py test/test_cpe_matching.py
+```

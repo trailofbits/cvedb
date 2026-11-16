@@ -1,0 +1,18 @@
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-cpe
+        name: Lint CPE fixes
+        language: system
+        entry: .venv/bin/ruff check
+        files: ^(cvedb/cpe\.py|test/test_cpe_matching\.py)$
+      - id: ruff-format-cpe
+        name: Check CPE formatting
+        language: system
+        entry: .venv/bin/ruff format --check
+        files: ^(cvedb/cpe\.py|test/test_cpe_matching\.py)$
+      - id: ty-cpe
+        name: Check CPE types
+        language: system
+        entry: .venv/bin/ty check --error-on-warning
+        files: ^(cvedb/cpe\.py|test/test_cpe_matching\.py)$

@@ -27,7 +27,10 @@ setup(
         "cvedb": ["data/*.json.gz", "data/*.meta"]
     },
     extras_require={
-        "dev": ["flake8", "pytest", "rstr>=3.2.2,<4", "twine"]
+        "dev": [
+            "flake8", "pytest", "rstr>=3.2.2,<4", "twine", "hypothesis==6.168.5",
+            "ruff==0.17.4", "ty==0.0.99"
+        ]
     },
     entry_points={
         "console_scripts": [
