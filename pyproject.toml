@@ -1,5 +1,5 @@
 [build-system]
-requires = ["uv_build==0.13.7"]
+requires = ["uv_build==0.13.8"]
 build-backend = "uv_build"
 
 [project]
@@ -37,14 +37,14 @@ dev = [
     "actionlint-py==1.7.12.25",
     "hypothesis==6.170.15",
     "pip-audit==2.10.1",
-    "prek==0.5.10",
+    "prek==0.5.11",
     "pytest==9.2.0",
     "rstr==3.2.2",
-    "ruff==0.17.4",
+    "ruff==0.17.5",
     "shellcheck-py==0.11.0.1",
     "shfmt-py==4.2.0",
     "twine==7.0.0",
-    "ty==0.0.100",
+    "ty==0.0.104",
     "zizmor==1.32.0",
 ]
 
